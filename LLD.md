@@ -329,7 +329,8 @@ Mapping: `From<TubeforgeError> for i32` centralizes exit codes. Errors always re
 
 | Path | Content |
 |---|---|
-| `/` | Dashboard home — health cards + 30s htmx polling fragments (`/home/counts`, `/home/ideas`) + SVG charts |
+| `/` | Dashboard home — health cards + Server-Sent Events (no polling) counts + SVG charts |
+| `GET /events` | SSE stream (text/event-stream): immediate `counts` event on connect, 5s change-detection tick, 15s `: ping` heartbeat |
 | `/scores` | Scores list; `/scores/{id}` drilldown fragment — 17-component breakdown via hx-get expand |
 | `/ideas` | Idea rows; `/ideas/{id}/{status}` hx-post → outerHTML swap (draft/saved/discarded) |
 | `/alerts` | Alert list; `/alerts/read`, `/alerts/clear` POSTs |

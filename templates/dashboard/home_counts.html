@@ -1,5 +1,5 @@
 <div class="grid" id="counts"
-     hx-get="/home/counts" hx-trigger="every 30s" hx-swap="outerHTML">
+     hx-ext="sse" sse-connect="/events" sse-swap="counts" hx-swap="outerHTML">
   <div class="card">
     <div class="k">Videos</div>
     <div class="v">{{ videos }}</div>

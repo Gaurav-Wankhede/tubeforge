@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use futures::StreamExt;
 use tubeforge::serve::{self, AppState};
 use tubeforge::storage::db::Db;
 
@@ -165,8 +166,10 @@ async fn home_embeds_counts_and_charts() {
         .text()
         .await
         .expect("body");
-    assert!(body.contains("hx-get=\"/home/counts\""));
-    assert!(body.contains("every 30s"));
+    assert!(body.contains("hx-ext=\"sse\""));
+    assert!(body.contains("sse-connect=\"/events\""));
+    assert!(body.contains("sse-swap=\"counts\""));
+    assert!(body.contains("/static/sse.js"), "sse extension script vendored");
     assert!(body.contains("<svg"), "inline SVG charts are server-rendered");
     assert!(body.contains("Views per channel"));
     assert!(body.contains("SEO score distribution"));
@@ -326,6 +329,168 @@ async fn unknown_routes_404_and_static_js_serves() {
     let body = resp.text().await.expect("body");
     assert!(body.contains("htmx"), "vendored htmx served");
     assert!(body.contains("htmx=function"), "looks like the real htmx bundle");
+
+    let resp = c
+        .get(format!("{base}/static/sse.js"))
+        .send()
+        .await
+        .expect("GET");
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.expect("body");
+    assert!(
+        body.contains("defineExtension"),
+        "vendored htmx SSE extension served"
+    );
+}
+
+#[tokio::test]
+async fn sse_stream_pushes_counts_event_on_connect() {
+    let (base, _port, _db) = spawn_server().await;
+    let resp = client()
+        .get(format!("{base}/events"))
+        .send()
+        .await
+        .expect("GET");
+    assert_eq!(resp.status(), 200);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .expect("content-type")
+        .to_str()
+        .expect("ascii");
+    assert!(
+        ct.starts_with("text/event-stream"),
+        "SSE content type, got {ct:?}"
+    );
+    assert_eq!(
+        resp.headers().get("cache-control").expect("cache-control"),
+        "no-cache",
+        "stream must never be cached"
+    );
+
+    // Read a bounded prefix: the first counts event is pushed immediately
+    // on connect (no 5s tick wait), so a 3s cap per chunk cannot hang.
+    let mut buf = Vec::new();
+    let mut body = resp.bytes_stream();
+    while buf.len() < 4096 && !String::from_utf8_lossy(&buf).contains("Videos") {
+        let chunk = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            body.next(),
+        )
+        .await
+        .expect("chunk within 3s — stream must not stall")
+        .expect("stream alive")
+        .expect("read bytes");
+        buf.extend_from_slice(&chunk);
+    }
+    let head = String::from_utf8_lossy(&buf);
+    assert!(
+        head.starts_with("event: counts"),
+        "first frame is the counts event, got: {head:.200}"
+    );
+    assert!(head.contains("data:"), "event carries a data line");
+    assert!(head.contains("Videos"), "data carries the counts card markup");
+    assert!(head.contains("id=\"counts\""), "swap target shape preserved");
+}
+
+#[tokio::test]
+async fn sse_stream_pushes_updated_counts_on_change() {
+    let (base, _port, mut db) = spawn_server().await;
+    let resp = client()
+        .get(format!("{base}/events"))
+        .send()
+        .await
+        .expect("GET");
+    let mut body = resp.bytes_stream();
+
+    // First event arrives immediately on connect.
+    let first = tokio::time::timeout(std::time::Duration::from_secs(3), body.next())
+        .await
+        .expect("first chunk within 3s")
+        .expect("stream alive")
+        .expect("read bytes");
+    let mut buf = String::from_utf8_lossy(&first).to_string();
+    assert!(buf.contains("Videos"), "first event carries the counts card");
+
+    // Mutate through the second handle to the same connection pool (the
+    // same write path the CLI uses), then expect the next tick to push a
+    // fresh `counts` event.
+    let at = "2026-08-01T00:00:00Z";
+    let mut batch = db.begin_batch().await.expect("begin batch");
+    batch
+        .upsert_video(&tubeforge::storage::db::VideoRow {
+            video_id: "ccc333ddd44".into(),
+            channel_id: Some("UCtest0000000000000000001".into()),
+            title: "SSE Change Detection".into(),
+            description: String::new(),
+            published_at: at.into(),
+            fetched_at: at.into(),
+            updated_at: at.into(),
+            source: "rss".into(),
+            view_count: Some(1),
+            ..Default::default()
+        })
+        .await
+        .expect("upsert video");
+    batch.commit().await.expect("commit batch");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+    let mut got_second = false;
+    while std::time::Instant::now() < deadline && !got_second {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        let chunk = tokio::time::timeout(remaining, body.next())
+            .await
+            .expect("chunk within deadline")
+            .expect("stream alive")
+            .expect("read bytes");
+        buf.push_str(&String::from_utf8_lossy(&chunk));
+        got_second = buf.matches("event: counts").count() >= 2;
+    }
+    assert!(
+        got_second,
+        "changed counts pushed within one 5s tick, got: {buf:.300}"
+    );
+}
+
+#[tokio::test]
+async fn sse_stream_heartbeats_and_stays_quiet() {
+    let (base, _port, _db) = spawn_server().await;
+    let resp = client()
+        .get(format!("{base}/events"))
+        .send()
+        .await
+        .expect("GET");
+    assert_eq!(resp.status(), 200);
+
+    // After the initial event the counts never change in this test, so the
+    // stream must emit exactly one `counts` event and then only the 15s
+    // `: ping` heartbeat comments — change detection at work.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let mut seen_ping = false;
+    let mut buf = String::new();
+    let mut body = resp.bytes_stream();
+    while std::time::Instant::now() < deadline && !seen_ping {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        let chunk = tokio::time::timeout(remaining, body.next())
+            .await
+            .expect("chunk within deadline")
+            .expect("stream alive")
+            .expect("read bytes");
+        buf.push_str(&String::from_utf8_lossy(&chunk));
+        seen_ping = buf.contains(": ping");
+    }
+    assert!(seen_ping, "15s heartbeat comment appeared, got: {buf:.200}");
+    assert_eq!(
+        buf.matches("event: counts").count(),
+        1,
+        "no spam: unchanged counts emit exactly one event"
+    );
 }
 
 #[tokio::test]

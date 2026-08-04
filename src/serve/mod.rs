@@ -23,14 +23,18 @@ pub mod svg;
 pub mod templates;
 
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::sync::Arc;
+use std::time::Duration;
 
 use askama::Template;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
+use futures::Stream;
 use serde_json::Value;
 
 use crate::analytics::keywords::trend_rows;
@@ -78,6 +82,12 @@ const ALERTS_LIMIT: usize = 100;
 /// Idea list cap for the page.
 const IDEAS_LIMIT: usize = 500;
 
+/// SSE tick: re-read the counts every 5s, send only on change.
+const SSE_TICK: Duration = Duration::from_secs(5);
+/// SSE comment heartbeat (`: ping`) so proxies/browsers keep the
+/// connection alive while the counts are quiet.
+const SSE_HEARTBEAT: Duration = Duration::from_secs(15);
+
 /// Shared server state: one Db connection (opened at startup) plus the
 /// actually-bound `host:port` used by the CSRF origin guard.
 #[derive(Clone)]
@@ -91,7 +101,7 @@ pub struct AppState {
 pub fn app(state: AppState) -> Router {
     Router::new()
         .route("/", get(home))
-        .route("/home/counts", get(home_counts))
+        .route("/events", get(events))
         .route("/scores", get(scores_page))
         .route("/scores/{id}", get(score_detail))
         .route("/ideas", get(ideas_page))
@@ -104,6 +114,7 @@ pub fn app(state: AppState) -> Router {
         .route("/health", get(health_page))
         .route("/healthz", get(healthz))
         .route("/static/htmx.min.js", get(htmx_js))
+        .route("/static/sse.js", get(sse_js))
         .fallback(not_found)
         .with_state(state)
 }
@@ -202,13 +213,40 @@ async fn home(State(st): State<AppState>) -> Response {
     page_impl("TubeForge — Dashboard", "home", &body)
 }
 
-/// Lightweight polling endpoint for the counts card (hx-trigger every 30s).
-async fn home_counts(State(st): State<AppState>) -> Response {
-    let counts = counts(&st).await;
-    match render(CountsTemplate { ..counts }) {
-        Ok(s) => html(s).into_response(),
-        Err(e) => internal(e),
-    }
+/// `GET /events`: Server-Sent Events stream that replaces the old 30s
+/// polling fragment. One `counts` event is pushed immediately on connect,
+/// then every `SSE_TICK` the counts are re-read and re-sent only when the
+/// values changed (cheap equality on the template values, no re-render for
+/// identical state). `KeepAlive` writes a `: ping` comment every
+/// `SSE_HEARTBEAT`. The stream ends cleanly on disconnect: the response
+/// body is dropped, which cancels the unfold future (no spawned task, no
+/// DB guard held across awaits — reads go through the async turso API).
+async fn events(State(st): State<AppState>) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let stream = futures::stream::unfold(
+        (st, None),
+        |(st, mut last): (AppState, Option<CountsTemplate>)| async move {
+            let mut first = true;
+            loop {
+                if !first {
+                    tokio::time::sleep(SSE_TICK).await;
+                }
+                first = false;
+                let counts = counts(&st).await;
+                if last.as_ref() == Some(&counts) {
+                    continue;
+                }
+                match render(counts.clone()) {
+                    Ok(html) => {
+                        let event = Event::default().event("counts").data(html);
+                        last = Some(counts);
+                        return Some((Ok::<_, Infallible>(event), (st, last)));
+                    }
+                    Err(e) => tracing::warn!("events: counts fragment render failed: {e}"),
+                }
+            }
+        },
+    );
+    Sse::new(stream).keep_alive(KeepAlive::new().interval(SSE_HEARTBEAT).text("ping"))
 }
 
 async fn scores_page(
@@ -572,6 +610,19 @@ async fn htmx_js() -> Response {
         .into_response()
 }
 
+/// Vendored htmx SSE extension (offline-first; no CDN). Pinned in
+/// `static/sse.js` — the v2.0.9 release asset is not published, so this is
+/// the htmx-2.x source from htmx-extensions `main` (sse-connect/sse-swap
+/// attribute syntax).
+async fn sse_js() -> Response {
+    (
+        StatusCode::OK,
+        [(axum::http::header::CONTENT_TYPE, "application/javascript")],
+        include_str!("../../static/sse.js"),
+    )
+        .into_response()
+}
+
 async fn not_found(req: axum::extract::Request) -> Response {
     let path = req.uri().path().to_string();
     let body = match render(NotFoundTemplate { path: &path }) {
@@ -642,7 +693,7 @@ fn stale_days() -> u32 {
     }
 }
 
-/// Health-card grid (shared by the page and the 30s polling fragment).
+/// Health-card grid (shared by the page and the SSE stream).
 async fn counts(st: &AppState) -> CountsTemplate {
     let h = reports::health(&st.db, stale_days()).await;
     let integrity = h
@@ -928,5 +979,25 @@ mod tests {
     fn position_formatting() {
         assert_eq!(fmt_position(Some(3)), "#3");
         assert_eq!(fmt_position(None), "—");
+    }
+
+    #[test]
+    fn counts_equality_detects_change() {
+        let c = |videos: i64| CountsTemplate {
+            videos,
+            channels: 2,
+            scores: 1,
+            ideas: 1,
+            quota_used: 100,
+            quota_limit: 10_000,
+            integrity_ok: true,
+            integrity: "ok".to_string(),
+            last_ingest: "2026-08-01T00:00:00Z".to_string(),
+            stale: 0,
+            index_fresh: true,
+        };
+        assert_eq!(c(2), c(2), "identical values are unchanged");
+        assert_ne!(c(2), c(3), "a single count change must be detected");
+        assert_ne!(c(2), CountsTemplate { integrity_ok: false, ..c(2) });
     }
 }

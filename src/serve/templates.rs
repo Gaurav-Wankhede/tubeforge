@@ -16,7 +16,7 @@ pub struct BaseTemplate<'a> {
     pub content: &'a str,
 }
 
-/// Dashboard home: counts card (polled), latest alerts, top ideas, charts.
+/// Dashboard home: counts card (SSE), latest alerts, top ideas, charts.
 #[derive(Template)]
 #[template(path = "dashboard/home.html")]
 pub struct HomeTemplate<'a> {
@@ -27,8 +27,10 @@ pub struct HomeTemplate<'a> {
     pub seo_chart: &'a str,
 }
 
-/// The polling fragment: health-card grid, swapped by htmx every 30s.
-#[derive(Template)]
+/// The SSE fragment: health-card grid, swapped on each `counts` event.
+/// `PartialEq` is the change detector: the stream compares a freshly-read
+/// template against the last one sent and only emits on difference.
+#[derive(Template, Debug, PartialEq, Eq, Clone)]
 #[template(path = "dashboard/home_counts.html")]
 pub struct CountsTemplate {
     pub videos: i64,

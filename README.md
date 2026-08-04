@@ -66,8 +66,9 @@ agent/script consumption.
 ## Dashboard (HTMX)
 
 `tubeforge serve` starts a local, server-rendered dashboard — the deferred
-PRD §5.4 item. Pages: dashboard home (health-card grid that auto-refreshes
-every 30 s, latest alerts, top ideas, inline-SVG charts), scores (top-100
+PRD §5.4 item. Pages: dashboard home (health-card grid that streams live
+via Server-Sent Events (no polling), latest alerts, top ideas, inline-SVG
+charts), scores (top-100
 table with title filter and row-expand showing all 17 SEO/GEO components),
 ideas (status marking via HTMX POST), keyword rank trends (with position
 sparklines), alerts (mark-read / clear), competitor scorecard, and the full
