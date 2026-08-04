@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    name: build + clippy + test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: [clippy]
+
+      - name: Build
+        run: cargo build
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      # NOTE: `cargo fmt --check` is intentionally NOT enforced yet — the
+      # codebase has never been rustfmt-formatted (verified locally: 3600
+      # lines of drift). Adding it now would force a massive unrelated diff;
+      # re-enable after a dedicated formatting pass.
+      - name: Test
+        run: cargo test

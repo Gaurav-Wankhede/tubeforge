@@ -1,6 +1,6 @@
 **Product Requirements Document (PRD)**  
 **Project Name:** **TubeForge**  
-**Version:** 3.12 (Phases 0–3 Complete)  
+**Version:** 3.13 (Phases 0–3 Complete)  
 **Date:** August 4, 2026  
 **Status:** Ready for Implementation (Phase 4)  
 **Intended License:** MIT or Apache-2.0 (all dependencies permissive: Turso MIT, tantivy MIT)
@@ -221,6 +221,7 @@ Full scoring engine (10 SEO + 7 GEO components, env-configurable weights, defaul
 Thumbnail Generator (`tubeforge thumbnail render|list-templates`; HTML + Tailwind CSS v4 templates, rendered by headless Chromium via **chromiumoxide 0.9.1** + pinned fetcher-downloaded Chromium into `<TUBEFORGE_DATA_DIR>/chromium/`, 1280×720 PNG; **mandatory `/assets` cleanup** via RAII Drop guard + error-path cleanup, `--keep-assets` debug-only) — resolves the §11 HTML-to-image open question, `check availability` (batched `videos.list` part=snippet,status; missing IDs → `video_unavailable` alerts; `privacy_status` column via migration 003, SCHEMA_VERSION 2→3, health `privacy` census), `export` (`--format zip|dir`; manifest.json + videos.csv 19 cols + channels/tags/keywords/keyword_rankings CSVs + JSON arrays; zip crate 8.6, deterministic), `filmot get` (opt-in `TUBEFORGE_FILMOT_KEY`, raw JSON passthrough, no DB writes, third-party service), agent interface hardening (stdout/stderr separation, `list_alerts(0)` LIMIT fix, nested `check availability`, `all_ideas()`, `tests/agent_contract.rs` 11 binary-level `--json` contract tests), **135/135 tests + 1 ignored (Chromium-gated render), clippy clean**. **Next: Phase 4 (Hardening & Release).**
 
 **Phase 4 – Hardening & Release**  
+**IN PROGRESS (Aug 4, 2026)** — done: performance smoke gate built + **PASSED on M4** (5k videos: ingest 20.2s + reindex 0.2s + ideas 0.06s = 20.5s vs 30s budget, release profile, `cargo test --release --test perf_gate -- --ignored`); release prep (LICENSE-MIT/LICENSE-APACHE, Cargo.toml metadata incl. rust-version 1.85 + license field, CHANGELOG 0.1.0, GitHub Actions CI matrix macOS-14/ubuntu/windows: build+clippy+test, README command table + cross-platform notes); cargo audit clean; cargo deny clean. **Remaining:** user actions (create GitHub repo, set remote, push, tag v0.1.0) + fmt pass (deferred, optional).
 Performance, documentation, cross-platform testing (Linux, Windows), public open-source release of **TubeForge** (MIT/Apache-2.0).
 
 ### 10. Assumptions & Risks
@@ -257,6 +258,8 @@ This is the complete Product Requirements Document (Version 3.9 — Refined).
 **v3.11 update (Aug 4, 2026):** Implementation status — **Phase 2 ✅ complete** (full SEO/GEO scoring engine with 2 new GEO signals, analytics suite, 5 new CLI commands, ingest hardening from MW Metadata research — ID checksums, category map, disabled-metric heuristic — 89/89 tests, clippy clean). Next: **Phase 3 — Thumbnails & Polish.**
 
 **v3.12 update (Aug 4, 2026):** Implementation status — **Phase 3 ✅ complete** (thumbnail generator via chromiumoxide + pinned Chromium with mandatory `/assets` cleanup, `check availability` + `privacy_status` migration 003, `export` with CSVs/ZIP, Filmot opt-in recovery, agent interface hardening — 135/135 tests + 1 ignored Chromium-gated, clippy clean). Next: **Phase 4 — Hardening & Release.**
+
+**v3.13 update (Aug 4, 2026):** Implementation status — **Phase 4 — IN PROGRESS** — performance smoke gate **PASSED on M4** (5k videos: ingest 20.2s + reindex 0.2s + ideas 0.06s = 20.5s vs 30s budget, release profile); release prep complete (LICENSE-MIT/LICENSE-APACHE, Cargo.toml metadata, CHANGELOG 0.1.0, CI matrix macOS-14/ubuntu/windows, README command table + cross-platform notes); cargo audit + cargo deny clean; 136/136 tests + 2 ignored (perf gate + Chromium render), clippy clean. Remaining: user actions (repo creation, push, tag v0.1.0) + optional fmt pass.
 
 **Key updates introduced in v3.9 (retained):**
 - **Storage:** custom "from scratch" database replaced with embedded **Turso Database** (MIT, SQLite-in-Rust): single-file `.db`, SQLite-compatible, portable back to SQLite (tested escape hatch).

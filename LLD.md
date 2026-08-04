@@ -1,9 +1,9 @@
 # TubeForge — Low-Level Design (LLD)
 
 **Project:** TubeForge — local-first YouTube SEO/GEO growth engine
-**Document version:** 1.3 | **Date:** August 4, 2026
-**Status:** Approved — Phases 0–3 delivered; implementation reference for Phase 4+
-**Companion documents:** `PRD.md` (v3.12), `HLD.md`
+**Document version:** 1.4 | **Date:** August 4, 2026
+**Status:** Approved — Phases 0–3 delivered; implementation reference for Phase 4+ (Phase 4 in progress)
+**Companion documents:** `PRD.md` (v3.13), `HLD.md`
 
 ---
 
@@ -506,7 +506,7 @@ backup:
 
 ## 12. Testing Strategy
 
-**Current: 135/135 tests passing + 1 ignored (Chromium-gated render) (Aug 4, 2026)**.
+**Current: 136/136 tests passing + 2 ignored (Aug 4, 2026)** — the 2 ignored: the opt-in performance gate + the Chromium-gated render. Suites: `tests/agent_contract.rs` (11 binary-level `--json` contract tests) and `tests/perf_gate.rs` (2 sanity tests + 1 ignored gate).
 
 | Layer | Tests |
 |---|---|
@@ -516,7 +516,7 @@ backup:
 | Compatibility | open `.db` via rusqlite (escape hatch) — CI every build |
 | Agent contract (`tests/agent_contract.rs`, binary-level) | 11 tests: every command's `--json` → single JSON object on stdout only; no ANSI codes; tracing on stderr only; envelope `ok/data/meta` + `error` shapes |
 | Property | dedupe fuzz (random URL sets), ingest idempotency (run twice → same state) |
-| Performance smoke | 5k videos ingest + reindex + top-k ideas < 30s on M4 (gate) |
+| Performance smoke | 5k videos ingest + reindex + top-k ideas < 30s on M4 (gate) — **✅ PASSED (Aug 4, 2026, M4, release profile)**: ingest 20.22s / reindex 0.20s / ideas 0.06s / total 20.49s vs 30s budget (per-phase budgets ingest<25 reindex<10 ideas<5). Run: `cargo test --release --test perf_gate -- --ignored --nocapture`. Scaling finding: post-ingest scoring is the dominant cost, ~4ms/video at 5k corpus (`tests/perf_gate.rs`) |
 | Render (ignored, env-gated) | `thumbnail render` end-to-end vs headless Chromium — 1 ignored test (requires pinned Chromium download) |
 
 ---
@@ -547,5 +547,5 @@ backup:
 2. ~~tantivy + turso exact version pins~~ → **Resolved at gate:** turso `=0.7.2`, tantivy `=0.26.1`, tokio `1.53.1`, rusqlite `0.40.1` (dev), rustc 1.97.1.
 3. ~~Thumbnail HTML→image method (SVG+resvg vs headless Chromium)~~ → **Resolved (Aug 4, 2026):** headless Chromium via **chromiumoxide 0.9.1** (CDP) + chromiumoxide_fetcher-pinned Chromium into `<data>/chromium` (rustls, no native-tls); Tailwind v4 compiled via standalone CLI (no Node); rationale — literal HTML+Tailwind v4, Blink determinism, pinned browser (no system Chrome dependency), permissive licensing.
 4. Embedding strategy post-v1 (lexical-only in v1, ADR-9).
-5. Windows CI target timing (post-macOS release).
+5. ~~Windows CI target timing (post-macOS release)~~ → **Resolved (Aug 4, 2026):** Windows CI added to the Phase 4 workflow matrix (`windows-latest`); cross-platform test results will come from the first CI run once the repo is pushed.
 6. ~~Undocumented YouTube API limits (`search.list` ~750-result cap; `playlistItems.list` 20k-video cap)~~ → **Resolved (Aug 4, 2026):** documented from MW Metadata wiki research — see §5.3 API behavior notes; RSS `feeds/videos.xml` has no playlist cap.

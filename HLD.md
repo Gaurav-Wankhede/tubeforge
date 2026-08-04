@@ -234,7 +234,7 @@ COMPAT.md guarantee: *"You should always be able to go back to SQLite."* If stor
 | 1 | ✅ COMPLETE — Fetch (RSS/oEmbed/API+quota), Ingest, Storage (schema, migrations), tantivy index, backup, CLI: ingest/score(basic)/backup/quota, MCP integration |
 | 2 | Scoring engine (SEO+GEO), ideas, keywords, scorecard, health, alerts, graph analytics |
 | 3 | ✅ COMPLETE (Aug 4, 2026) — Thumbnail generator (HTML→image via chromiumoxide headless Chromium + `/assets` cleanup), `check availability` (privacy census, migration 003), `export` (CSV/ZIP), Filmot opt-in recovery, agent interface hardening |
-| 4 | Hardening, docs, cross-platform, release (MIT) |
+| 4 | **IN PROGRESS (Aug 4, 2026)** — perf gate passed (5k videos < 30s on M4, release profile), release prep done (LICENSE files, Cargo.toml metadata, CHANGELOG, README, .gitignore), CI matrix macOS-14/ubuntu/windows (build+clippy+test); release pending repo push + tag v0.1.0 |
 
 ---
 

@@ -2,6 +2,12 @@
 name = "tubeforge"
 version = "0.1.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.85"
+description = "Local-first YouTube SEO/GEO growth engine — RSS/oEmbed/API ingest, BM25 scoring, analytics, thumbnail generation. CLI-first, agent-ready."
+keywords = ["youtube", "seo", "analytics", "cli", "search"]
+categories = ["command-line-utilities", "multimedia"]
+repository = "https://github.com/<owner>/tubeforge"
 
 [dependencies]
 chromiumoxide = { version = "0.9.1", features = ["fetcher"] }
