@@ -21,9 +21,7 @@
       <td>{% if row.has_score %}{{ row.seo }}{% else %}—{% endif %}</td>
       <td>{% if row.has_score %}{{ row.geo }}{% else %}—{% endif %}</td>
       <td><strong>{% if row.has_score %}{{ row.total }}{% else %}—{% endif %}</strong></td>
-    </tr>
-    <tr id="detail-{{ row.video_id }}" class="detail">
-      <td colspan="6" style="padding:0"></td>
+      <td id="detail-{{ row.video_id }}" colspan="6" style="padding:0"></td>
     </tr>
   {% else %}
     <tr><td colspan="6" class="muted">No scored videos yet — run <code>tubeforge score</code> or ingest first.</td></tr>

@@ -186,6 +186,10 @@ async fn scores_page_filters_and_lists() {
         .expect("body");
     assert!(body.contains("TubeForge Dashboard Guide"));
     assert!(body.contains("77.8"), "overall score rendered");
+    assert!(
+        body.contains("<td id=\"detail-"),
+        "detail target id lives on the td, not the tr"
+    );
 
     let body = c
         .get(format!("{base}/scores?q=tips"))
