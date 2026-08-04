@@ -1,0 +1,22 @@
+/*! Tailwind CSS v4 entry for thumbnail templates.
+ *
+ * Compiled at dev-time with the standalone Tailwind CLI (no Node):
+ *   tailwindcss -i templates/input.css -o templates/tailwind.css --minify
+ * The compiled output is committed and embedded into the HTML template
+ * via include_str! (single-file HTML at render time).
+ *
+ * Content detection is scoped explicitly to this directory so class names
+ * are scanned from templates/default.html (v4 auto-detects from CWD, but the
+ * compiler may be invoked from elsewhere).
+ */
+@import "tailwindcss";
+
+@source "./";
+
+@theme {
+  /* System font stack only — offline-first, renders identically in
+   * headless Chromium at 1280x720. */
+  --font-thumb: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --color-ink: #0f172a;
+}

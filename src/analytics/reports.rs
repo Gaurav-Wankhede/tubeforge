@@ -296,11 +296,15 @@ pub async fn health(db: &Db, stale_days: u32) -> Result<Value, TubeforgeError> {
     // choice) — counted, not penalized; RSS rows with NULL counts are
     // genuinely unknown (current behavior kept). Computed in Rust (no
     // recursive CTEs / window functions — Turso constraint, LLD §12).
+    // The `privacy` census (migration 003 snapshots from `check
+    // availability`) rides the same single pass over `videos`.
     let mut engagement = Vec::new();
     let mut disabled_videos = 0i64;
     let mut disabled_view = 0i64;
     let mut disabled_like = 0i64;
     let mut disabled_comment = 0i64;
+    let mut privacy_unlisted = 0i64;
+    let mut privacy_private = 0i64;
     for v in db.all_videos().await? {
         engagement.push(crate::scoring::geo::engagement_completeness(
             &v.source,
@@ -322,6 +326,11 @@ pub async fn health(db: &Db, stale_days: u32) -> Result<Value, TubeforgeError> {
                 disabled_videos += 1;
             }
         }
+        match v.privacy_status.as_deref() {
+            Some("unlisted") => privacy_unlisted += 1,
+            Some("private") => privacy_private += 1,
+            _ => {}
+        }
     }
     let engagement_complete = if engagement.is_empty() {
         0.0
@@ -331,6 +340,10 @@ pub async fn health(db: &Db, stale_days: u32) -> Result<Value, TubeforgeError> {
 
     Ok(json!({
         "counts": counts,
+        "privacy": {
+            "unlisted": privacy_unlisted,
+            "private": privacy_private,
+        },
         "last_ingest": last.map(|l| json!({
             "at": l.at, "batch_id": l.batch_id, "item": l.item, "status": l.status,
         })),
@@ -476,8 +489,9 @@ pub async fn evaluate_alerts(
 }
 
 /// Insert an alert unless an identical (kind, channel_id, message) row
-/// already exists.
-async fn insert_once(
+/// already exists. Public: `check availability` raises `video_unavailable`
+/// alerts through the same dedupe rule (Phase 3 workstream B).
+pub async fn insert_once(
     db: &Db,
     kind: &str,
     channel_id: Option<&str>,

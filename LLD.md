@@ -1,9 +1,9 @@
 # TubeForge — Low-Level Design (LLD)
 
 **Project:** TubeForge — local-first YouTube SEO/GEO growth engine
-**Document version:** 1.2 | **Date:** August 4, 2026
-**Status:** Approved — Phases 0–2 delivered; implementation reference for Phase 3+
-**Companion documents:** `PRD.md` (v3.11), `HLD.md`
+**Document version:** 1.3 | **Date:** August 4, 2026
+**Status:** Approved — Phases 0–3 delivered; implementation reference for Phase 4+
+**Companion documents:** `PRD.md` (v3.12), `HLD.md`
 
 ---
 
@@ -61,9 +61,19 @@ tubeforge/
 │   │   ├── ideas.rs            # Next Ideas generation + ranking
 │   │   ├── keywords.rs         # rank tracking snapshots
 │   │   ├── reports.rs          # scorecard, health, alerts
+│   ├── thumbnail/
+│   │   ├── mod.rs              # template fill, render orchestration (chromiumoxide)
+│   │   ├── render.rs           # CDP render → PNG 1280×720
+│   │   └── assets.rs           # per-render temp dir + RAII cleanup guard
+│   ├── export/
+│   │   ├── mod.rs              # manifest.json + JSON arrays
+│   │   └── csv.rs              # videos/channels/tags/keywords CSV writers (escaping)
+│   ├── templates/
+│   │   ├── default.html input.css tailwind.css   # compiled Tailwind v4 CSS committed
 │   └── commands/               # one file per CLI subcommand
 │       ├── init.rs ingest.rs score.rs ideas.rs keywords.rs
 │       ├── scorecard.rs health.rs alerts.rs backup.rs quota.rs reindex.rs
+│       ├── thumbnail.rs availability.rs export.rs filmot.rs
 └── tests/
     ├── fixtures/               # local HTTP server (wiremock) RSS/oEmbed/API payloads
     └── *.rs                    # integration + property tests
@@ -79,7 +89,7 @@ tubeforge/
 
 ```sql
 PRAGMA journal_mode = WAL;
-PRAGMA user_version = 2;   -- managed by migrations (SCHEMA_VERSION = 2)
+PRAGMA user_version = 3;   -- managed by migrations (SCHEMA_VERSION = 3)
 
 CREATE TABLE channels (
   channel_id        TEXT PRIMARY KEY,      -- UC...  (or handle-resolved id)
@@ -121,13 +131,13 @@ CREATE TABLE videos (
                                            --   unused in v1 (lexical-only), so
                                            --   adding them later = no migration
   source        TEXT NOT NULL DEFAULT 'rss',  -- rss | oembed | api
+  privacy_status TEXT,                        -- public | unlisted | private (api only, migration 003)
   fetched_at    TEXT NOT NULL,
   updated_at    TEXT NOT NULL
 );
 CREATE INDEX idx_videos_channel      ON videos(channel_id);
 CREATE INDEX idx_videos_published    ON videos(published_at DESC);
 CREATE INDEX idx_videos_channel_pub  ON videos(channel_id, published_at DESC);
-
 CREATE TABLE competitors (
   channel_id  TEXT PRIMARY KEY REFERENCES channels(channel_id) ON DELETE CASCADE,
   label       TEXT,                          -- display name / grouping
@@ -225,7 +235,7 @@ CREATE TABLE meta (                           -- key/value store
 
 - **No FTS virtual table** — Turso's FTS5 `MATCH` is unsupported and Turso FTS is beta (HLD §7.2). tantivy owns all text ranking.
 - **Embeddings column: reserved, unused in v1.** Cosine similarity operates on token-overlap vectors (title/tags) — *lexical* similarity (ADR-9, user-locked Aug 3 2026). Semantic embeddings can be added later **without any schema change** (the `embedding` BLOB column already exists in the schema).
-- **`meta` schema_version** drives migrations (section 9). **SCHEMA_VERSION = 2** (migration 002, Phase 2): adds `videos.recording_date` / `recording_location_name` / `recording_lat` / `recording_lng` / `topic_categories` (JSON) and `keyword_rankings.topics` (JSON); version-gated idempotent, 001 unchanged.
+- **`meta` schema_version** drives migrations (section 9). **SCHEMA_VERSION = 3** (migration 003, Phase 3): adds `videos.privacy_status` (public/unlisted/private, api only); version-gated idempotent, 001/002 unchanged.
 - **Ingest idempotency:** `video_id` PK → upsert semantics (see 5.3).
 
 ---
@@ -249,6 +259,11 @@ CREATE TABLE meta (                           -- key/value store
 | `backup` | VACUUM INTO + integrity_check + retention prune | `--to <dir>` |
 | `quota` | Show YouTube API usage | `--json` |
 | `reindex` | Rebuild tantivy from `videos` | — |
+| `thumbnail render` | Render template → 1280×720 PNG; raw assets in per-render temp dir, deleted after success (RAII guard; `--keep-assets` debug-only) | `--template`, `--title`, `--output`, `--keep-assets`, `--json` |
+| `thumbnail list-templates` | List available HTML+Tailwind templates | `--json` |
+| `check availability` | Batched `videos.list` (part=snippet,status); missing IDs → `video_unavailable` alerts; records `privacy_status` | `--json` |
+| `export` | Export DB to `--format zip\|dir`: manifest.json, videos.csv (19 cols), channels.csv, tags.csv, keywords.csv, keyword_rankings.csv + JSON arrays (videos, ideas, alerts, scores); deterministic zip archives | `--format`, `--output`, `--json` |
+| `filmot get` | Opt-in recovery lookup via Filmot API (`TUBEFORGE_FILMOT_KEY`); raw JSON passthrough + tolerant summary; no DB writes; non-fatal. Empty key → exit 1 CONFIG error | `--video-id`, `--json` |
 | `serve` | **Deferred** (HTMX dashboard) | — |
 
 Global: `--json`, `--verbose`, `--db-path`, `--config <env file>`.
@@ -324,6 +339,10 @@ Mapping: `From<TubeforgeError> for i32` centralizes exit codes. Errors always re
 - `commentThreads.list` is effectively unlimited (11M+ comments observed; 100/page, 1 unit each).
 - Missing `statistics` fields = disabled metric (uploader choice); `madeForKids` / auto-generated " - Topic" channels / private-deleted → `commentsDisabled` / `videoNotFound` error reasons.
 - `recordingDetails` / `topicDetails` parts each cost quota per-part per-call by Google's model; TubeForge bills conservatively at 1 unit/call (documented in `src/fetch/api.rs` comment).
+
+**Availability check (`check availability`, Phase 3):** batch `videos.list` with `part=snippet,status` (≤50 IDs/call); any ID returned missing → `video_unavailable` alert; `privacy_status` from `status.privacyStatus` persisted per video (migration 003).
+
+**Filmot recovery (`filmot get`, Phase 3):** opt-in third-party service — `GET filmot.com/api/getvideos?id=<id>&flags=1&key=<TUBEFORGE_FILMOT_KEY>`; raw JSON passthrough + tolerant summary only; never writes DB; network/parse failures non-fatal; empty `TUBEFORGE_FILMOT_KEY` → CONFIG error (exit 1) with setup hint.
 
 ### 5.4 Quota ledger (`fetch/quota.rs`)
 - Persist per-day usage in `meta`; `quota` command renders used/limit per endpoint.
@@ -450,6 +469,7 @@ backup:
 - `meta.schema_version` (mirrors `PRAGMA user_version`); ordered migration list in `storage/schema.rs`; each migration runs in one transaction; version bump persisted. `init`/open applies pending migrations.
 - Migration 001 (full v1 schema) is marked **idempotent and always applied** — Phase 0-era DBs (meta-only) gain the full schema in place without a version bump (their recorded v1 is retained). This is the documented Phase 0→v1 upgrade path.
 - Migration 002 (Phase 2, SCHEMA_VERSION 1→2): adds `videos.recording_date` / `recording_location_name` / `recording_lat` / `recording_lng` / `topic_categories` (JSON) and `keyword_rankings.topics` (JSON); idempotent via version gating — 001 untouched, 002 never re-runs after the bump.
+- Migration 003 (Phase 3, SCHEMA_VERSION 2→3): adds `videos.privacy_status` TEXT (public/unlisted/private, api only, from `check availability`); idempotent via version gating — 001/002 untouched, 003 never re-runs after the bump.
 - Rule: migrations never depend on experimental Turso features.
 
 ---
@@ -478,22 +498,26 @@ backup:
 | `TUBEFORGE_GEO_LOCATION_SIGNAL` | `0.10` | `location_signal` GEO weight (C1) |
 | `TUBEFORGE_GEO_TOPIC_RELEVANCE` | `0.10` | `topic_relevance` GEO weight (C2) |
 | `TUBEFORGE_QUOTA_WARN_AT` | `90` (percent) | Warn threshold |
+| `TUBEFORGE_CHROMIUM_DIR` | `<data>/chromium` | Headless Chromium install root (chromiumoxide_fetcher-pinned, auto-downloaded) |
+| `TUBEFORGE_FILMOT_KEY` | *(empty)* | Opt-in Filmot API key for `filmot get`; empty = command disabled (CONFIG error) |
 | `LOG_LEVEL` | `info` | tracing filter |
 
 ---
 
 ## 12. Testing Strategy
 
-**Current: 89/89 tests passing (Aug 4, 2026)** — 62 unit / 5 Phase-0 gate / 16 Phase-1 / 6 Phase-2.
+**Current: 135/135 tests passing + 1 ignored (Chromium-gated render) (Aug 4, 2026)**.
 
 | Layer | Tests |
 |---|---|
-| Unit | ID extraction regexes, scoring formulas (golden vectors), quota math, weight parsing, PageRank on toy graphs, JSON envelope shape, **ID checksum tables (bare video/channel regexes), extended URL-form parsing (`/v/ /embed/ /shorts/ /video/ /watch/ /live/`, playlist prefixes, `@handle`/`/user/`/`/c/`), `SC→UC` channel transform, category lookup (32 ids), disabled-vs-unknown metric heuristic, location/topic golden vectors** |
+| Unit | ID extraction regexes, scoring formulas (golden vectors), quota math, weight parsing, PageRank on toy graphs, JSON envelope shape, **ID checksum tables (bare video/channel regexes), extended URL-form parsing (`/v/ /embed/ /shorts/ /video/ /watch/ /live/`, playlist prefixes, `@handle`/`/user/`/`/c/`), `SC→UC` channel transform, category lookup (32 ids), disabled-vs-unknown metric heuristic, location/topic golden vectors, thumbnail template fill, asset-cleanup RAII (temp dir removed on success + error path), CSV escaping (quotes/commas/newlines), Filmot tolerant parse (missing fields/keys)** |
 | Integration (wiremock fixture server) | RSS parse from fixture feed; oEmbed; API batching ≤50 ids; ETag 304 path; quota 403 → fallback |
-| Storage | upsert idempotency, source precedence, migration v0→v1, **v1→v2 idempotency (version-gated re-run)**, **backup round-trip: ingest → backup → restore → integrity_check == ok** |
+| Storage | upsert idempotency, source precedence, migration v0→v1, **v1→v2 idempotency (version-gated re-run)**, **v2→v3 idempotency (privacy_status, version-gated re-run)**, **backup round-trip: ingest → backup → restore → integrity_check == ok** |
 | Compatibility | open `.db` via rusqlite (escape hatch) — CI every build |
+| Agent contract (`tests/agent_contract.rs`, binary-level) | 11 tests: every command's `--json` → single JSON object on stdout only; no ANSI codes; tracing on stderr only; envelope `ok/data/meta` + `error` shapes |
 | Property | dedupe fuzz (random URL sets), ingest idempotency (run twice → same state) |
 | Performance smoke | 5k videos ingest + reindex + top-k ideas < 30s on M4 (gate) |
+| Render (ignored, env-gated) | `thumbnail render` end-to-end vs headless Chromium — 1 ignored test (requires pinned Chromium download) |
 
 ---
 
@@ -521,6 +545,7 @@ backup:
 
 1. ~~SEO/GEO weights & formula final values (needs user's scoring spec — PRD §5.2).~~ → **Resolved (Aug 4, 2026):** documented defaults baked in (10 SEO + 7 GEO components, each set sums 1.0); tunable via `TUBEFORGE_SEO_*` / `TUBEFORGE_GEO_*`.
 2. ~~tantivy + turso exact version pins~~ → **Resolved at gate:** turso `=0.7.2`, tantivy `=0.26.1`, tokio `1.53.1`, rusqlite `0.40.1` (dev), rustc 1.97.1.
-3. Embedding strategy post-v1 (lexical-only in v1, ADR-9).
-4. Windows CI target timing (post-macOS release).
-5. ~~Undocumented YouTube API limits (`search.list` ~750-result cap; `playlistItems.list` 20k-video cap)~~ → **Resolved (Aug 4, 2026):** documented from MW Metadata wiki research — see §5.3 API behavior notes; RSS `feeds/videos.xml` has no playlist cap.
+3. ~~Thumbnail HTML→image method (SVG+resvg vs headless Chromium)~~ → **Resolved (Aug 4, 2026):** headless Chromium via **chromiumoxide 0.9.1** (CDP) + chromiumoxide_fetcher-pinned Chromium into `<data>/chromium` (rustls, no native-tls); Tailwind v4 compiled via standalone CLI (no Node); rationale — literal HTML+Tailwind v4, Blink determinism, pinned browser (no system Chrome dependency), permissive licensing.
+4. Embedding strategy post-v1 (lexical-only in v1, ADR-9).
+5. Windows CI target timing (post-macOS release).
+6. ~~Undocumented YouTube API limits (`search.list` ~750-result cap; `playlistItems.list` 20k-video cap)~~ → **Resolved (Aug 4, 2026):** documented from MW Metadata wiki research — see §5.3 API behavior notes; RSS `feeds/videos.xml` has no playlist cap.

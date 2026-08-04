@@ -85,6 +85,9 @@ pub struct VideoRow {
     /// `topicDetails.topicCategories` — JSON array of category URLs (C2);
     /// labels are derived at read time, never stored twice.
     pub topic_categories: String,
+    /// `status.privacyStatus` snapshot from `check availability` (migration
+    /// 003): `public` | `unlisted` | `private`, NULL until first checked.
+    pub privacy_status: Option<String>,
 }
 
 /// One row of the `scores` table (LLD §3.1).
@@ -166,7 +169,7 @@ const VIDEO_COLS: &str = "video_id, channel_id, title, description, tags, catego
                           duration_sec, published_at, view_count, like_count, comment_count, \
                           thumb_url, source, fetched_at, updated_at, recording_date, \
                           recording_location_name, recording_lat, recording_lng, \
-                          topic_categories";
+                          topic_categories, privacy_status";
 
 // ---------------------------------------------------------------------------
 // Open / migrate / integrity
@@ -628,6 +631,31 @@ impl Db {
         query_rows_owned(&self.conn, sql, params!(status, limit as i64), idea_from_values).await
     }
 
+    /// All ideas ordered by score DESC, then newest first (no LIMIT — used by
+    /// `export` and the agent-facing JSON arrays).
+    pub async fn all_ideas(&self) -> Result<Vec<IdeaRow>, TubeforgeError> {
+        let sql = "SELECT idea_id, title_suggestion, rationale, score, status, source_video, \
+                   created_at FROM ideas ORDER BY score DESC, idea_id DESC";
+        query_rows_owned(&self.conn, sql, (), idea_from_values).await
+    }
+
+    /// Record the `status.privacyStatus` snapshot from `check availability`
+    /// (migration 003 column). NULL clears a previous snapshot.
+    pub async fn set_privacy_status(
+        &self,
+        video_id: &str,
+        privacy_status: Option<&str>,
+    ) -> Result<(), TubeforgeError> {
+        self.conn
+            .execute(
+                "UPDATE videos SET privacy_status = ?1, updated_at = ?2 WHERE video_id = ?3",
+                params!(privacy_status, crate::util::now_rfc3339(), video_id),
+            )
+            .await
+            .map_err(|e| storage_err("PRIVACY_STATUS", e))?;
+        Ok(())
+    }
+
     /// Mark a set of idea ids with a status (draft|saved|discarded).
     pub async fn set_idea_statuses(&self, ids: &[i64], status: &str) -> Result<usize, TubeforgeError> {
         let mut marked = 0;
@@ -648,7 +676,11 @@ impl Db {
     pub async fn list_alerts(&self, limit: usize) -> Result<Vec<AlertRow>, TubeforgeError> {
         let sql = "SELECT alert_id, kind, channel_id, message, severity, created_at, read_at \
                    FROM alerts ORDER BY created_at DESC, alert_id DESC LIMIT ?1";
-        query_rows_owned(&self.conn, sql, params!(limit as i64), alert_from_values).await
+        // SQLite `LIMIT -1` = no limit: honor the documented "0 = all" (the
+        // plain `LIMIT 0` form would return nothing — agent-contract audit,
+        // Phase 3 workstream B).
+        let limit = if limit == 0 { -1 } else { limit as i64 };
+        query_rows_owned(&self.conn, sql, params!(limit), alert_from_values).await
     }
 
     /// True when an identical alert (kind, channel_id, message) already exists —
@@ -786,9 +818,10 @@ impl Batch<'_> {
                                      category_id, duration_sec, published_at, view_count, \
                                      like_count, comment_count, thumb_url, source, fetched_at, \
                                      updated_at, recording_date, recording_location_name, \
-                                     recording_lat, recording_lng, topic_categories) \
+                                     recording_lat, recording_lng, topic_categories, \
+                                     privacy_status) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, \
-                         ?16, ?17, ?18, ?19, ?20) \
+                         ?16, ?17, ?18, ?19, ?20, ?21) \
                  ON CONFLICT(video_id) DO UPDATE SET \
                    channel_id = excluded.channel_id, title = excluded.title, \
                    description = excluded.description, tags = excluded.tags, \
@@ -801,7 +834,8 @@ impl Batch<'_> {
                    recording_location_name = excluded.recording_location_name, \
                    recording_lat = excluded.recording_lat, \
                    recording_lng = excluded.recording_lng, \
-                   topic_categories = excluded.topic_categories",
+                   topic_categories = excluded.topic_categories, \
+                   privacy_status = excluded.privacy_status",
                 params!(
                     v.video_id.as_str(),
                     v.channel_id.as_deref(),
@@ -822,7 +856,8 @@ impl Batch<'_> {
                     v.recording_location_name.as_deref(),
                     v.recording_lat,
                     v.recording_lng,
-                    v.topic_categories.as_str()
+                    v.topic_categories.as_str(),
+                    v.privacy_status.as_deref()
                 ),
             )
             .await
@@ -945,6 +980,7 @@ fn video_from_values(v: &[Value]) -> VideoRow {
         recording_lat: f(&v[17]),
         recording_lng: f(&v[18]),
         topic_categories: t(&v[19]),
+        privacy_status: s(&v[20]),
     }
 }
 

@@ -33,6 +33,12 @@ const FIELDS: &str = "items(id,snippet(title,description,tags,categoryId,publish
                       topicDetails(topicCategories))";
 const CHANNELS_FIELDS: &str = "items(id,snippet(title))";
 
+/// `videos.list` parts/fields for `check availability`: `status` only is
+/// enough for privacyStatus, but the spec calls for `part=snippet,status`
+/// and the snippet carries the channel id used to attach the alert.
+const AVAILABILITY_PART: &str = "snippet,status";
+const AVAILABILITY_FIELDS: &str = "items(id,snippet(channelId),status(privacyStatus))";
+
 /// Rich metadata for one video (snippet + contentDetails + statistics +
 /// recordingDetails + topicDetails — the two free GEO signals, C1/C2).
 #[derive(Debug, Clone, Default)]
@@ -60,6 +66,15 @@ pub struct ApiVideo {
     /// `topicDetails.topicCategories` — Wikipedia category URLs (MW Metadata
     /// §topicDetails); labels are derived at read time.
     pub topic_categories: Vec<String>,
+}
+
+/// One `videos.list` availability snapshot: id + optional channel + the
+/// `status.privacyStatus` value (`public` | `unlisted` | `private`).
+#[derive(Debug, Clone, Default)]
+pub struct AvailabilityItem {
+    pub video_id: String,
+    pub channel_id: Option<String>,
+    pub privacy_status: Option<String>,
 }
 
 pub struct ApiClient {
@@ -95,6 +110,123 @@ impl ApiClient {
             quota::record_videos_list_calls(db, 1).await?;
         }
         Ok(out)
+    }
+
+    /// `check availability` path: batched `videos.list` with
+    /// `part=snippet,status` for the privacy snapshot. Only videos that
+    /// still exist come back; deleted/private-hidden ids are simply absent
+    /// from the response (YouTube also reports them as a `videoNotFound`
+    /// API error — see LLD §5.3 API behavior notes).
+    ///
+    /// Missing-ids are the CALLER's concern (alerts, not errors — the
+    /// command treats "absent" as a finding, never a failure). To honor
+    /// that, an HTTP 400/404 whose body carries a `videoNotFound` reason is
+    /// mapped to an empty result (every requested id counts as missing)
+    /// instead of a hard `Fetch` error; any other non-success status
+    /// propagates like the normal API path. 1 unit/call is recorded in the
+    /// ledger either way.
+    ///
+    /// (Future unlisted-discovery path, documented per PRD research: the
+    /// playlistItems `videoOwnerChannelId` heuristic — an unlisted video
+    /// still surfaces through a channel's uploads playlist item, so
+    /// `playlistItems.list` can catch what `videos.list` hides. Not
+    /// implemented here: it costs extra quota per channel and unlisted
+    /// videos are a deliberate uploader choice, not an availability
+    /// failure.)
+    pub async fn fetch_availability(
+        &self,
+        db: &Db,
+        ids: &[String],
+    ) -> Result<Vec<AvailabilityItem>, TubeforgeError> {
+        let mut out = Vec::new();
+        for chunk in ids.chunks(BATCH_MAX) {
+            out.extend(self.request_availability(chunk).await?);
+            // 1 unit per call (LLD §5.3), recorded even when the batch
+            // comes back empty (deleted/private videos).
+            quota::record_videos_list_calls(db, 1).await?;
+        }
+        Ok(out)
+    }
+
+    /// One `videos.list` availability call. The 404/400-with-`videoNotFound`
+    /// body is folded into an empty result (see `fetch_availability`).
+    /// Mirrors `request()` (3× backoff, 403 quotaExceeded → `Quota`) but
+    /// keeps 400/404 responses readable instead of erroring on them.
+    async fn request_availability(
+        &self,
+        ids: &[String],
+    ) -> Result<Vec<AvailabilityItem>, TubeforgeError> {
+        let url = Url::parse_with_params(
+            &format!("{}/videos", self.clients.api_base),
+            &[
+                ("part", AVAILABILITY_PART),
+                ("id", &ids.join(",")),
+                ("fields", AVAILABILITY_FIELDS),
+                ("key", self.key.as_str()),
+            ],
+        )
+        .map_err(|e| TubeforgeError::Fetch {
+            src: Source::Api,
+            url: "videos.list".to_string(),
+            inner: format!("build url: {e}"),
+        })?;
+        let url_s = url.to_string();
+
+        let mut delay = Duration::from_millis(400);
+        let mut attempts: u32 = 0;
+        loop {
+            attempts += 1;
+            let resp = self.clients.http.get(&url_s).send().await.map_err(|e| {
+                TubeforgeError::Fetch {
+                    src: Source::Api,
+                    url: url_s.clone(),
+                    inner: e.to_string(),
+                }
+            })?;
+            let status = resp.status();
+            if status.is_success() {
+                return parse_availability_body(&url_s, resp.text().await).await;
+            }
+            if status == reqwest::StatusCode::BAD_REQUEST
+                || status == reqwest::StatusCode::NOT_FOUND
+            {
+                // Fold the documented "video(s) gone" error into an empty
+                // result so the command can raise alerts instead of failing.
+                let body = resp.text().await.unwrap_or_default();
+                if body.contains("videoNotFound") {
+                    return Ok(Vec::new());
+                }
+                return Err(TubeforgeError::Fetch {
+                    src: Source::Api,
+                    url: url_s,
+                    inner: format!("HTTP {status} {body}"),
+                });
+            }
+            if status == reqwest::StatusCode::FORBIDDEN {
+                let body = resp.text().await.unwrap_or_default();
+                if body.contains("quotaExceeded") {
+                    return Err(TubeforgeError::Quota {
+                        endpoint: Endpoint::VideosList,
+                        remaining: 0,
+                    });
+                }
+                return Err(TubeforgeError::Fetch {
+                    src: Source::Api,
+                    url: url_s,
+                    inner: format!("HTTP 403 {body}"),
+                });
+            }
+            if is_retryable(status) && attempts <= MAX_RETRIES {
+                tokio::time::sleep(delay).await;
+                delay = delay.saturating_mul(2);
+                continue;
+            }
+            return Err(TubeforgeError::Fetch {
+                src: Source::Api,
+                url: url_s,
+                inner: format!("HTTP {status}"),
+            });
+        }
     }
 
     /// Resolve `@handle` → channel id via `channels.list(forHandle=...)`
@@ -271,6 +403,63 @@ pub fn iso8601_duration_to_secs(d: &str) -> Option<i64> {
 struct ApiVideosResponse {
     #[serde(default)]
     items: Vec<ApiVideo>,
+}
+
+/// `check availability` response: only existing videos appear in `items`.
+#[derive(Debug, Deserialize)]
+struct AvailabilityResponse {
+    #[serde(default)]
+    items: Vec<AvailabilityRawItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AvailabilityRawItem {
+    id: String,
+    #[serde(default)]
+    snippet: Option<AvailabilitySnippet>,
+    #[serde(default)]
+    status: Option<AvailabilityStatus>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AvailabilitySnippet {
+    #[serde(default, rename = "channelId")]
+    channel_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AvailabilityStatus {
+    #[serde(default, rename = "privacyStatus")]
+    privacy_status: Option<String>,
+}
+
+/// Parse a 200 availability body. A body that is not JSON at all is a
+/// `Parse` error (documented taxonomy — never a panic).
+async fn parse_availability_body(
+    url: &str,
+    body: Result<String, reqwest::Error>,
+) -> Result<Vec<AvailabilityItem>, TubeforgeError> {
+    let body = body.map_err(|e| TubeforgeError::Fetch {
+        src: Source::Api,
+        url: url.to_string(),
+        inner: format!("read body: {e}"),
+    })?;
+    let parsed: AvailabilityResponse = serde_json::from_str(&body).map_err(|e| {
+        TubeforgeError::Parse {
+            src: Source::Api,
+            item: url.to_string(),
+            inner: format!("json: {e}"),
+        }
+    })?;
+    Ok(parsed
+        .items
+        .into_iter()
+        .map(|i| AvailabilityItem {
+            video_id: i.id,
+            channel_id: i.snippet.and_then(|s| s.channel_id),
+            privacy_status: i.status.and_then(|s| s.privacy_status),
+        })
+        .collect())
 }
 
 #[derive(Debug, Deserialize)]

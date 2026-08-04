@@ -17,6 +17,8 @@ pub struct Config {
     pub log_level: String,
     pub youtube_api_key: Option<String>,
     pub quota_warn_at: u64,
+    /// Pinned Chromium install dir for the thumbnail renderer (Phase 3).
+    pub chromium_dir: PathBuf,
 }
 
 impl Config {
@@ -27,11 +29,12 @@ impl Config {
         Config {
             db_path: data_dir.join("tubeforge.db"),
             backup_dir: data_dir.join("backups"),
-            data_dir,
+            data_dir: data_dir.clone(),
             backup_keep: 10,
             log_level: "info".to_string(),
             youtube_api_key: None,
             quota_warn_at: 90,
+            chromium_dir: data_dir.join("chromium"),
         }
     }
 }
@@ -57,6 +60,18 @@ pub fn load(cli_config: Option<&Path>, cli_db_path: Option<&Path>) -> Result<Con
     } else {
         // Default: <data>/backups (LLD §11).
         cfg.backup_dir = cfg.data_dir.join("backups");
+    }
+
+    // Default: <data>/chromium; follows the effective data dir when the env
+    // override is absent (Phase 3 thumbnail renderer).
+    if let Ok(v) = std::env::var("TUBEFORGE_CHROMIUM_DIR") {
+        if !v.trim().is_empty() {
+            cfg.chromium_dir = expand_tilde(&v);
+        } else {
+            cfg.chromium_dir = cfg.data_dir.join("chromium");
+        }
+    } else {
+        cfg.chromium_dir = cfg.data_dir.join("chromium");
     }
 
     if let Ok(v) = std::env::var("TUBEFORGE_BACKUP_KEEP") {

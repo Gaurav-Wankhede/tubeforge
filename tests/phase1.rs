@@ -48,6 +48,7 @@ fn test_config(dir: &Path) -> Config {
         log_level: "info".to_string(),
         youtube_api_key: Some("test-key".to_string()),
         quota_warn_at: 90,
+        chromium_dir: dir.join("chromium"),
     }
 }
 
@@ -571,8 +572,8 @@ const ALL_TABLES: [&str; 11] = [
 async fn p1_migration_full_schema() {
     let dir = tempfile::tempdir().expect("tempdir");
     let db = Db::open(&dir.path().join("test.db")).await.expect("open db");
-    assert_eq!(db.user_version().await.expect("user_version"), 2);
-    assert_eq!(db.meta_get("schema_version").await.expect("meta").as_deref(), Some("2"));
+    assert_eq!(db.user_version().await.expect("user_version"), 3);
+    assert_eq!(db.meta_get("schema_version").await.expect("meta").as_deref(), Some("3"));
 
     let mut missing = Vec::new();
     for t in ALL_TABLES {
@@ -621,9 +622,9 @@ async fn p1_migration_002_columns_and_idempotency() {
     let dir = tempfile::tempdir().expect("tempdir");
     let db_path = dir.path().join("m002.db");
 
-    // First open applies 001 + 002.
+    // First open applies 001 + 002 + 003.
     let db = Db::open(&db_path).await.expect("open 1");
-    assert_eq!(db.user_version().await.expect("version"), 2);
+    assert_eq!(db.user_version().await.expect("version"), 3);
     for c in [
         "recording_date", "recording_location_name", "recording_lat", "recording_lng",
         "topic_categories",
@@ -636,7 +637,7 @@ async fn p1_migration_002_columns_and_idempotency() {
     // columns (ALTER TABLE ADD COLUMN has no IF NOT EXISTS — the version gate
     // is what makes the migration idempotent-safe).
     let db2 = Db::open(&db_path).await.expect("open 2 (migrate re-apply)");
-    assert_eq!(db2.user_version().await.expect("version"), 2);
+    assert_eq!(db2.user_version().await.expect("version"), 3);
     assert!(table_cols(&db2, "videos").await.contains(&"recording_date".to_string()));
     assert!(table_cols(&db2, "keyword_rankings").await.contains(&"topics".to_string()));
     // Nullable columns: a minimal insert without the new columns still works.
@@ -667,8 +668,8 @@ async fn table_cols(db: &Db, table: &str) -> Vec<String> {
 }
 
 /// Phase 0 databases (meta-only, user_version=1) must upgrade in place to the
-/// full schema — migration 001 is idempotent (always applied) and migration
-/// 002 (v1 → v2) then applies, so the recorded version lands on 2.
+/// full schema — migration 001 is idempotent (always applied) and migrations
+/// 002/003 (version-gated) then apply, so the recorded version lands on 3.
 #[tokio::test]
 async fn p1_migration_phase0_upgrade() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -696,10 +697,10 @@ async fn p1_migration_phase0_upgrade() {
             .expect("schema_version");
     }
 
-    // Reopen through the crate: full schema must appear, version bumps to 2
-    // (001 idempotent + 002 version-gated both apply).
+    // Reopen through the crate: full schema must appear, version bumps to 3
+    // (001 idempotent + 002/003 version-gated both apply).
     let db = Db::open(&db_path).await.expect("open upgraded db");
-    assert_eq!(db.user_version().await.unwrap(), 2, "phase0 → v2 in one open");
+    assert_eq!(db.user_version().await.unwrap(), 3, "phase0 → v3 in one open");
     let mut missing = Vec::new();
     for t in ALL_TABLES {
         let n = db
@@ -713,5 +714,5 @@ async fn p1_migration_phase0_upgrade() {
         }
     }
     assert!(missing.is_empty(), "phase0 upgrade missing: {missing:?}");
-    assert_eq!(db.meta_get("schema_version").await.unwrap().as_deref(), Some("2"));
+    assert_eq!(db.meta_get("schema_version").await.unwrap().as_deref(), Some("3"));
 }

@@ -7,12 +7,15 @@
 //! version bump. Migration 002 (v1 → v2) adds the C1/C2 GEO columns:
 //! `recordingDetails` (recording date/location) and `topicDetails`
 //! (topic category URLs) on `videos`, plus the derived topic-label snapshot
-//! column `topics` on `keyword_rankings`. It is version-gated (applied once
-//! per database — the gate IS the idempotency guard, since this engine's
-//! `ALTER TABLE ... ADD COLUMN` has no `IF NOT EXISTS` form).
+//! column `topics` on `keyword_rankings`. Migration 003 (v2 → v3) adds the
+//! nullable `privacy_status` column on `videos`, written by `check
+//! availability` (Phase 3 workstream B). Both later migrations are
+//! version-gated (applied once per database — the gate IS the idempotency
+//! guard, since this engine's `ALTER TABLE ... ADD COLUMN` has no
+//! `IF NOT EXISTS` form).
 
 /// Current schema version (mirrors `PRAGMA user_version`).
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 /// meta keys used by the ledger (LLD §3.1 comment block).
 pub const META_KEYS: [&str; 6] = [
@@ -47,7 +50,20 @@ pub const MIGRATIONS: &[Migration] = &[
         idempotent: false,
         sql: MIGRATION_002_SQL,
     },
+    Migration {
+        version: 3,
+        idempotent: false,
+        sql: MIGRATION_003_SQL,
+    },
 ];
+
+/// Migration 003: `videos.privacy_status` (nullable TEXT) — the privacy
+/// snapshot (`public`/`unlisted`/`private`) recorded by `check availability`
+/// for videos that still exist. Applied exactly once per database
+/// (version-gated by the runner).
+pub const MIGRATION_003_SQL: &str = r#"
+ALTER TABLE videos ADD COLUMN privacy_status TEXT;
+"#;
 
 /// Migration 002: C1 `recordingDetails` columns + C2 `topic_categories`
 /// column on `videos`, and the `topics` snapshot column (derived topic

@@ -1,0 +1,50 @@
+<!doctype html>
+<!--
+  TubeForge default thumbnail template — 1280x720.
+  Placeholder convention (replaced at render time by src/thumbnail/mod.rs):
+    {{TITLE}}            video title (bold, up to 3 lines)
+    {{CHANNEL}}          channel display name (empty string hides the strip)
+    {{CHANNEL_INITIAL}}  first letter of the channel name (avatar letter)
+    {{DURATION}}         "MM:SS" / "H:MM:SS" (empty string hides the badge)
+    {{CATEGORY}}         YouTube category display name (empty hides the badge)
+    {{VIDEO_ID}}         video id, small text under the brand mark
+  Empty-content elements self-hide via the `empty:` variant, so the fill
+  step needs no conditional markup. System font stack only (offline-first).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1280, initial-scale=1">
+<link rel="stylesheet" href="tailwind.css">
+<title>{{TITLE}}</title>
+</head>
+<body class="font-thumb relative h-[720px] w-[1280px] overflow-hidden bg-linear-to-br from-slate-950 via-slate-900 to-indigo-950 text-white antialiased">
+  <!-- Subtle radial glow blobs (no images, no external fetches). -->
+  <div class="pointer-events-none absolute -left-40 -top-40 h-[560px] w-[560px] rounded-full bg-indigo-600/25 blur-3xl"></div>
+  <div class="pointer-events-none absolute -bottom-48 -right-32 h-[520px] w-[520px] rounded-full bg-purple-600/20 blur-3xl"></div>
+  <div class="pointer-events-none absolute right-64 top-10 h-[300px] w-[300px] rounded-full bg-cyan-500/15 blur-3xl"></div>
+
+  <!-- Category badge + brand mark. -->
+  <header class="absolute inset-x-10 top-8 flex items-start justify-between gap-6">
+    <span class="empty:hidden rounded-full border border-white/25 bg-white/10 px-5 py-2 text-xl font-semibold tracking-wide text-white/95">{{CATEGORY}}</span>
+    <div class="flex items-baseline gap-3">
+      <span class="text-lg font-bold uppercase tracking-[0.35em] text-white/45">Tubeforge</span>
+      <span class="empty:hidden text-base font-medium tracking-widest text-white/25">{{VIDEO_ID}}</span>
+    </div>
+  </header>
+
+  <!-- Title: bold, readable, up to 3 lines. -->
+  <main class="absolute inset-x-10 bottom-[130px]">
+    <h1 class="line-clamp-3 text-[60px] font-black leading-[1.08] tracking-tight text-white [text-shadow:0_4px_24px_rgb(0_0_0_/_0.6)]">{{TITLE}}</h1>
+  </main>
+
+  <!-- Channel strip (bottom-left) + duration badge (bottom-right). -->
+  <footer class="absolute inset-x-10 bottom-8 flex items-end justify-between gap-6">
+    <div class="flex items-center gap-4">
+      <span class="empty:hidden grid h-14 w-14 place-items-center rounded-full bg-white/15 text-2xl font-bold text-white">{{CHANNEL_INITIAL}}</span>
+      <span class="empty:hidden max-w-[640px] truncate text-3xl font-semibold text-white/90">{{CHANNEL}}</span>
+    </div>
+    <span class="empty:hidden rounded-md bg-black/60 px-3 py-1 text-2xl font-semibold tabular-nums text-white">{{DURATION}}</span>
+  </footer>
+</body>
+</html>

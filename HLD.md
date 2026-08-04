@@ -1,9 +1,9 @@
 # TubeForge — High-Level Design (HLD)
 
 **Project:** TubeForge — local-first YouTube SEO/GEO growth engine
-**Document version:** 1.1 | **Date:** August 3, 2026
-**Status:** Approved — Phases 0–1 delivered; basis for Phase 2
-**Companion documents:** `PRD.md` (v3.9), `LLD.md`
+**Document version:** 1.2 | **Date:** August 4, 2026
+**Status:** Approved — Phases 0–3 delivered; basis for Phase 4
+**Companion documents:** `PRD.md` (v3.12), `LLD.md`
 
 ---
 
@@ -233,7 +233,7 @@ COMPAT.md guarantee: *"You should always be able to go back to SQLite."* If stor
 | 0 | ✅ COMPLETE — Repo, config, M4 smoke gate (Turso CRUD/WAL/backup round-trip), CLI skeleton, error taxonomy |
 | 1 | ✅ COMPLETE — Fetch (RSS/oEmbed/API+quota), Ingest, Storage (schema, migrations), tantivy index, backup, CLI: ingest/score(basic)/backup/quota, MCP integration |
 | 2 | Scoring engine (SEO+GEO), ideas, keywords, scorecard, health, alerts, graph analytics |
-| 3 | Thumbnail generator (HTML→image + `/assets` cleanup), polish, agent interface hardening |
+| 3 | ✅ COMPLETE (Aug 4, 2026) — Thumbnail generator (HTML→image via chromiumoxide headless Chromium + `/assets` cleanup), `check availability` (privacy census, migration 003), `export` (CSV/ZIP), Filmot opt-in recovery, agent interface hardening |
 | 4 | Hardening, docs, cross-platform, release (MIT) |
 
 ---
@@ -257,6 +257,6 @@ COMPAT.md guarantee: *"You should always be able to go back to SQLite."* If stor
 ## 14. Open Questions (HLD level)
 
 1. SEO/GEO scoring spec (§5.2 of PRD) — signal weights/formulas to be authored with the user (the one item research cannot settle).
-2. Thumbnail HTML→image method (Phase 3): SVG+resvg vs headless Chromium.
+2. ~~Thumbnail HTML→image method (Phase 3): SVG+resvg vs headless Chromium.~~ → **Resolved (Aug 4, 2026):** headless Chromium via **chromiumoxide 0.9.1** (CDP) with chromiumoxide_fetcher-pinned Chromium (auto-downloaded to `<data>/chromium`, `TUBEFORGE_CHROMIUM_DIR`); Tailwind v4 via standalone CLI (no Node); rationale — literal HTML+Tailwind v4 rendering, Blink determinism, pinned browser (no system Chrome), MIT/Apache-2.0, actively maintained.
 3. ~~Exact Turso crate + tantivy version pins~~ → **Resolved at Phase 0 gate:** turso `=0.7.2`, tantivy `=0.26.1`.
 4. Windows support timing (v1 macOS-first).

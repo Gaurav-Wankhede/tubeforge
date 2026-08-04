@@ -1,8 +1,8 @@
 **Product Requirements Document (PRD)**  
 **Project Name:** **TubeForge**  
-**Version:** 3.11 (Phases 0–2 Complete)  
+**Version:** 3.12 (Phases 0–3 Complete)  
 **Date:** August 4, 2026  
-**Status:** Ready for Implementation (Phase 3)  
+**Status:** Ready for Implementation (Phase 4)  
 **Intended License:** MIT or Apache-2.0 (all dependencies permissive: Turso MIT, tantivy MIT)
 
 ### 1. Overview
@@ -217,8 +217,8 @@ Fetch (RSS/oEmbed/API+quota ledger), full v1 schema + migration runner, Ingest (
 **Phase 2 – SEO/GEO Intelligence + Analytics — ✅ COMPLETE (Aug 4, 2026)**  
 Full scoring engine (10 SEO + 7 GEO components, env-configurable weights, defaults sum 1.0; new free signals `location_signal` from `recordingDetails`, `topic_relevance` from `topicDetails.topicCategories`), analytics (PageRank graph, Next Ideas, keyword rank tracking, scorecard/health/alerts), CLI `ideas`/`keywords`/`scorecard`/`health`/`alerts` + `--json` envelopes, ingest hardening (bare-ID checksums, extended URL-form parsing, 32-category map, disabled-metric heuristic), migration 002 (SCHEMA_VERSION 1→2), 89/89 tests green, clippy clean. **Next: Phase 3 (Thumbnails & Polish).**
 
-**Phase 3 – Thumbnails & Polish**  
-Thumbnail Generator (HTML + Tailwind + mandatory cleanup), remaining features, agent interface hardening.
+**Phase 3 – Thumbnails & Polish — ✅ COMPLETE (Aug 4, 2026)**  
+Thumbnail Generator (`tubeforge thumbnail render|list-templates`; HTML + Tailwind CSS v4 templates, rendered by headless Chromium via **chromiumoxide 0.9.1** + pinned fetcher-downloaded Chromium into `<TUBEFORGE_DATA_DIR>/chromium/`, 1280×720 PNG; **mandatory `/assets` cleanup** via RAII Drop guard + error-path cleanup, `--keep-assets` debug-only) — resolves the §11 HTML-to-image open question, `check availability` (batched `videos.list` part=snippet,status; missing IDs → `video_unavailable` alerts; `privacy_status` column via migration 003, SCHEMA_VERSION 2→3, health `privacy` census), `export` (`--format zip|dir`; manifest.json + videos.csv 19 cols + channels/tags/keywords/keyword_rankings CSVs + JSON arrays; zip crate 8.6, deterministic), `filmot get` (opt-in `TUBEFORGE_FILMOT_KEY`, raw JSON passthrough, no DB writes, third-party service), agent interface hardening (stdout/stderr separation, `list_alerts(0)` LIMIT fix, nested `check availability`, `all_ideas()`, `tests/agent_contract.rs` 11 binary-level `--json` contract tests), **135/135 tests + 1 ignored (Chromium-gated render), clippy clean**. **Next: Phase 4 (Hardening & Release).**
 
 **Phase 4 – Hardening & Release**  
 Performance, documentation, cross-platform testing (Linux, Windows), public open-source release of **TubeForge** (MIT/Apache-2.0).
@@ -240,7 +240,7 @@ Official RSS, oEmbed, and free YouTube Data API remain available • User unders
 ### 11. Open Questions
 - ~~Exact on-disk format~~ → **Resolved:** Turso/SQLite `.db`, single file.
 - ~~Preferred lightweight charting approach~~ → **Deferred** with dashboard.
-- Preferred HTML-to-image method for thumbnails (SVG+resvg vs headless Chromium) — Phase 3 decision.
+- ~~Preferred HTML-to-image method for thumbnails (SVG+resvg vs headless Chromium)~~ → **Resolved (Aug 4, 2026):** headless Chromium via **chromiumoxide 0.9.1** — literal HTML+Tailwind v4 rendering, Blink determinism, chromiumoxide_fetcher-pinned Chromium (no system Chrome dependency), MIT/Apache-2.0, actively maintained.
 - ~~Degree of Wasm support in v1~~ → **Resolved:** deferred post-v1.
 - ~~Default local UI authentication~~ → **Not applicable:** CLI-only v1.
 - ~~SEO/GEO scoring spec~~ (signal weights/formulas — §5.2) → **Resolved (Aug 4, 2026):** documented defaults baked in (10 SEO + 7 GEO components, each set sums 1.0) with per-component env overrides (`TUBEFORGE_SEO_*` / `TUBEFORGE_GEO_*`).
@@ -256,6 +256,8 @@ This is the complete Product Requirements Document (Version 3.9 — Refined).
 
 **v3.11 update (Aug 4, 2026):** Implementation status — **Phase 2 ✅ complete** (full SEO/GEO scoring engine with 2 new GEO signals, analytics suite, 5 new CLI commands, ingest hardening from MW Metadata research — ID checksums, category map, disabled-metric heuristic — 89/89 tests, clippy clean). Next: **Phase 3 — Thumbnails & Polish.**
 
+**v3.12 update (Aug 4, 2026):** Implementation status — **Phase 3 ✅ complete** (thumbnail generator via chromiumoxide + pinned Chromium with mandatory `/assets` cleanup, `check availability` + `privacy_status` migration 003, `export` with CSVs/ZIP, Filmot opt-in recovery, agent interface hardening — 135/135 tests + 1 ignored Chromium-gated, clippy clean). Next: **Phase 4 — Hardening & Release.**
+
 **Key updates introduced in v3.9 (retained):**
 - **Storage:** custom "from scratch" database replaced with embedded **Turso Database** (MIT, SQLite-in-Rust): single-file `.db`, SQLite-compatible, portable back to SQLite (tested escape hatch).
 - **Analytics:** BM25 via **tantivy** in TubeForge's own code; vector via brute-force cosine; graph via PageRank — all Rust-owned, none of it depending on the engine's experimental index modules (beta ranking bugs, open corruption issue #7664).
@@ -263,4 +265,4 @@ This is the complete Product Requirements Document (Version 3.9 — Refined).
 - **Interface:** CLI-first v1 with `--json` envelope, documented exit codes, and MCP server; HTMX dashboard deferred.
 - **Cross-platform:** macOS (M4) first-class; Linux and Windows in Phase 4.
 
-Implementation status: **Phases 0–2 delivered.** You can now begin **Phase 3**.
+Implementation status: **Phases 0–3 delivered.** You can now begin **Phase 4**.

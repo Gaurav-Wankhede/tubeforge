@@ -940,6 +940,9 @@ fn video_from_api(a: &ApiVideo, now: &str) -> VideoRow {
         recording_lat: a.recording_lat,
         recording_lng: a.recording_lng,
         topic_categories: serde_json::to_string(&a.topic_categories).unwrap_or_else(|_| "[]".to_string()),
+        // Privacy is snapshotted separately by `check availability` — the
+        // API path never sets it here.
+        privacy_status: None,
     }
 }
 

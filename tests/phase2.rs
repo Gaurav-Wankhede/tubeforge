@@ -36,6 +36,7 @@ fn test_config(dir: &Path) -> Config {
         log_level: "info".to_string(),
         youtube_api_key: Some("test-key".to_string()),
         quota_warn_at: 90,
+        chromium_dir: dir.join("chromium"),
     }
 }
 

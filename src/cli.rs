@@ -3,7 +3,8 @@
 //! Global flags: `--json`, `--verbose`, `--db-path`, `--config <env file>`.
 //! Subcommands: `init`, `ingest channels/links`, `refresh`, `score`, `ideas`,
 //! `keywords add|check|report`, `scorecard`, `health`, `alerts`, `reindex`,
-//! `backup`, `quota`, `mcp`.
+//! `backup`, `quota`, `mcp`, `thumbnail render|list-templates`,
+//! `check availability`, `export`, `filmot get`.
 
 use std::path::PathBuf;
 
@@ -117,6 +118,83 @@ pub enum Command {
     Quota,
     /// Print the MCP server config snippet (tursodb <db> --mcp).
     Mcp,
+    /// Generate thumbnails from HTML+Tailwind templates (Phase 3, PRD §5.7).
+    Thumbnail {
+        #[command(subcommand)]
+        kind: ThumbnailKind,
+    },
+    /// Detect tracked videos that went private/deleted; snapshot
+    /// privacyStatus (Phase 3 workstream B).
+    Check {
+        #[command(subcommand)]
+        kind: CheckKind,
+    },
+    /// Export the local dataset (CSVs + JSON arrays) as a zip or directory.
+    Export {
+        /// Output directory (zip archive lands here in --format zip).
+        #[arg(long, value_name = "DIR", required = true)]
+        out: PathBuf,
+        /// zip (default) or plain dir.
+        #[arg(long, value_name = "FORMAT", default_value = "zip")]
+        format: ExportFormat,
+    },
+    /// Opt-in lookups against third-party indexes (Phase 3 workstream B).
+    Filmot {
+        #[command(subcommand)]
+        kind: FilmotKind,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CheckKind {
+    /// Check stored videos for privacy/deletion via videos.list (needs
+    /// YOUTUBE_API_KEY); missing videos raise `video_unavailable` alerts.
+    Availability {
+        /// Restrict the check to these video ids (default: all stored).
+        #[arg(long, value_name = "ID")]
+        video_id: Vec<String>,
+    },
+}
+
+/// `--format` for `export` (parsed case-insensitively by clap).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum ExportFormat {
+    Zip,
+    Dir,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum FilmotKind {
+    /// Archived metadata for one video from the Filmot index (own API key).
+    Get {
+        /// The 11-char YouTube video id.
+        #[arg(long, value_name = "ID", required = true)]
+        video_id: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ThumbnailKind {
+    /// Render a 1280x720 thumbnail PNG via headless Chromium.
+    Render {
+        /// Stored video id to render (title, channel, duration, category).
+        #[arg(long, value_name = "ID")]
+        video_id: Option<String>,
+        /// Draft title to render (no stored video needed).
+        #[arg(long, value_name = "TITLE")]
+        draft_title: Option<String>,
+        /// Template name (default: "default").
+        #[arg(long, value_name = "NAME", default_value = "default")]
+        template: String,
+        /// Output PNG path (default: <cwd>/<video_id>.png).
+        #[arg(long, value_name = "PATH")]
+        out: Option<PathBuf>,
+        /// Keep the temporary assets dir (debug only; PRD §5.7 cleanup).
+        #[arg(long, action = ArgAction::SetTrue)]
+        keep_assets: bool,
+    },
+    /// List the available template names.
+    ListTemplates,
 }
 
 #[derive(Debug, Subcommand)]
@@ -195,6 +273,17 @@ impl Cli {
             Command::Backup { .. } => "backup",
             Command::Quota => "quota",
             Command::Mcp => "mcp",
+            Command::Thumbnail { kind } => match kind {
+                ThumbnailKind::Render { .. } => "thumbnail render",
+                ThumbnailKind::ListTemplates => "thumbnail list-templates",
+            },
+            Command::Check { kind } => match kind {
+                CheckKind::Availability { .. } => "check availability",
+            },
+            Command::Export { .. } => "export",
+            Command::Filmot { kind } => match kind {
+                FilmotKind::Get { .. } => "filmot get",
+            },
         }
     }
 }

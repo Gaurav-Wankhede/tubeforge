@@ -4,7 +4,10 @@
 use std::time::Instant;
 
 use clap::Parser;
-use tubeforge::cli::{Cli, Command, IngestKind, KeywordsKind};
+use tubeforge::cli::{
+    CheckKind, Cli, Command, ExportFormat as CliExportFormat, FilmotKind, IngestKind,
+    KeywordsKind, ThumbnailKind,
+};
 use tubeforge::commands;
 use tubeforge::config;
 use tubeforge::error::TubeforgeError;
@@ -125,14 +128,52 @@ async fn dispatch(cli: &Cli) -> Result<(serde_json::Value, Option<QuotaInfo>), T
         Command::Backup { to } => commands::backup::run(&cfg, to.clone()).await?,
         Command::Quota => commands::quota::run(&cfg).await?,
         Command::Mcp => commands::mcp::run(&cfg).await?,
+        Command::Thumbnail { kind } => match kind {
+            ThumbnailKind::Render {
+                video_id,
+                draft_title,
+                template,
+                out,
+                keep_assets,
+            } => {
+                commands::thumbnail::run_render(
+                    &cfg,
+                    &commands::thumbnail::RenderInput {
+                        video_id: video_id.clone(),
+                        draft_title: draft_title.clone(),
+                        template: template.clone(),
+                        out: out.clone(),
+                        keep_assets: *keep_assets,
+                    },
+                )
+                .await?
+            }
+            ThumbnailKind::ListTemplates => commands::thumbnail::run_list_templates().await?,
+        },
+        Command::Check { kind } => match kind {
+            CheckKind::Availability { video_id } => {
+                commands::availability::run(&cfg, video_id).await?
+            }
+        }
+        Command::Export { out, format } => {
+            let fmt = match format {
+                CliExportFormat::Zip => commands::export::ExportFormat::Zip,
+                CliExportFormat::Dir => commands::export::ExportFormat::Dir,
+            };
+            commands::export::run(&cfg, out, fmt).await?
+        }
+        Command::Filmot { kind } => match kind {
+            FilmotKind::Get { video_id } => commands::filmot::run_get(video_id).await?,
+        },
     };
 
     // Attach the quota ledger to `meta.quota` for commands that touch the
     // YouTube API (LLD §4.2 envelope contract).
     let quota_opt = match &cli.command {
-        Command::Ingest { .. } | Command::Refresh { .. } | Command::Quota => {
-            quota_meta(&cfg).await
-        }
+        Command::Ingest { .. }
+        | Command::Refresh { .. }
+        | Command::Quota
+        | Command::Check { .. } => quota_meta(&cfg).await,
         _ => None,
     };
 
