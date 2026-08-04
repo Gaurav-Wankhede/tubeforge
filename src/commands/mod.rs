@@ -20,4 +20,5 @@ pub mod refresh;
 pub mod reindex;
 pub mod score;
 pub mod scorecard;
+pub mod serve;
 pub mod thumbnail;

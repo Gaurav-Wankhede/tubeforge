@@ -1,0 +1,23 @@
+<h1>Keyword rank trends</h1>
+<p class="muted">{{ checked }} snapshots recorded (<code>tubeforge keywords check</code> writes them; deltas computed in Rust).</p>
+
+<table>
+  <thead>
+    <tr><th>Keyword</th><th>Latest</th><th>Previous</th><th>Delta</th><th>Trend</th><th>Topics</th></tr>
+  </thead>
+  <tbody>
+  {% for row in rows %}
+    <tr>
+      <td><strong>{{ row.keyword }}</strong></td>
+      <td>{{ row.latest }}</td>
+      <td class="muted">{{ row.previous }}</td>
+      <td class="{{ row.delta_class }}">{{ row.delta }}</td>
+      <td>{{ row.spark|safe }}</td>
+      <td class="muted">{{ row.topics }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6" class="muted">No tracked keywords yet — <code>tubeforge keywords add &lt;kw&gt;</code> then <code>keywords check</code>.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p class="muted">Lower positions are better; a negative delta is an improvement. Sparklines break when a snapshot was unranked.</p>

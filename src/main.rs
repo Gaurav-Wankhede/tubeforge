@@ -46,6 +46,12 @@ fn init_tracing(cli: &Cli) {
 
 /// Full command pipeline. Returns the process exit code.
 async fn run(cli: Cli, start: Instant) -> i32 {
+    // `serve` is a long-running server: it never emits the JSON envelope
+    // (LLD §4.2 stdout purity), so it is dispatched outside the envelope
+    // pipeline entirely.
+    if let Command::Serve { .. } = &cli.command {
+        return run_serve(&cli).await;
+    }
     let json = cli.json;
     let result = dispatch(&cli).await;
     let duration_ms = start.elapsed().as_millis() as u64;
@@ -65,6 +71,29 @@ async fn run(cli: Cli, start: Instant) -> i32 {
             } else {
                 eprintln!("{}: {}", err.code(), err);
             }
+            i32::from(&err)
+        }
+    }
+}
+
+/// `serve` bootstrap: config load + command run; stdout untouched, exit 0
+/// on clean shutdown (Ctrl-C), error line on stderr otherwise.
+async fn run_serve(cli: &Cli) -> i32 {
+    let cfg = match config::load(cli.config.as_deref(), cli.db_path.as_deref()) {
+        Ok(c) => c,
+        Err(err) => {
+            eprintln!("{}: {}", err.code(), err);
+            return i32::from(&err);
+        }
+    };
+    let (host, port) = match &cli.command {
+        Command::Serve { host, port } => (host.clone(), *port),
+        _ => unreachable!("run_serve is only called for Command::Serve"),
+    };
+    match commands::serve::run(&cfg, &host, port).await {
+        Ok(()) => 0,
+        Err(err) => {
+            eprintln!("{}: {}", err.code(), err);
             i32::from(&err)
         }
     }
@@ -165,6 +194,8 @@ async fn dispatch(cli: &Cli) -> Result<(serde_json::Value, Option<QuotaInfo>), T
         Command::Filmot { kind } => match kind {
             FilmotKind::Get { video_id } => commands::filmot::run_get(video_id).await?,
         },
+        // Serve never reaches the envelope pipeline (special-cased in run()).
+        Command::Serve { .. } => unreachable!("serve is handled before dispatch"),
     };
 
     // Attach the quota ledger to `meta.quota` for commands that touch the

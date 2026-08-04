@@ -1,0 +1,23 @@
+{% if missing %}
+  <p class="muted">No score row for <code>{{ video_id }}</code>.</p>
+{% else %}
+  <div class="cols2">
+    <table>
+      <thead><tr><th colspan="2">SEO components ({{ seo_total }})</th></tr></thead>
+      <tbody>
+      {% for (name, value) in seo_components %}
+        <tr><td>{{ name }}</td><td>{{ value }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <table>
+      <thead><tr><th colspan="2">GEO components ({{ geo_total }})</th></tr></thead>
+      <tbody>
+      {% for (name, value) in geo_components %}
+        <tr><td>{{ name }}</td><td>{{ value }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="muted"><code>{{ video_id }}</code> — {{ title }} · overall <strong>{{ total }}</strong></p>
+{% endif %}

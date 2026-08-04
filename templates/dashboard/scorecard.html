@@ -1,0 +1,48 @@
+<h1>Competitor scorecard</h1>
+<p class="muted">Per-channel metrics vs the median of the compared set ({{ compared }} channels; <code>tubeforge scorecard</code> semantics).</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Channel</th><th>Videos</th><th>Total views</th><th>Growth</th>
+      <th>Title len</th><th>Digits</th><th>How-to</th><th>Tag overlap</th>
+      <th>Centrality</th><th>SEO avg</th><th>SEO med</th><th>SEO min–max</th><th>Scored</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for row in rows %}
+    <tr>
+      <td><strong>{{ row.title }}</strong><br><span class="muted">{{ row.channel_id }}</span></td>
+      <td>{{ row.videos }}</td>
+      <td>{{ row.total_views }}</td>
+      <td>{{ row.views_growth }}</td>
+      <td>{{ row.avg_title_len }}</td>
+      <td>{{ row.digit_ratio }}</td>
+      <td>{{ row.howto_ratio }}</td>
+      <td>{{ row.tag_overlap }}</td>
+      <td>{{ row.centrality }}</td>
+      <td>{{ row.seo_avg }}</td>
+      <td>{{ row.seo_median }}</td>
+      <td class="muted">{{ row.seo_min }} – {{ row.seo_max }}</td>
+      <td>{{ row.scored }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="13" class="muted">No competitors configured — add channels and mark them via <code>tubeforge</code> competitors, or compare with <code>tubeforge scorecard --channel &lt;id&gt;</code>.</td></tr>
+  {% endfor %}
+  <tr style="border-top: 2px solid var(--acc)">
+    <td><strong>Median</strong></td>
+    <td>{{ median.videos }}</td>
+    <td>{{ median.total_views }}</td>
+    <td>{{ median.views_growth }}</td>
+    <td>{{ median.avg_title_len }}</td>
+    <td>{{ median.digit_ratio }}</td>
+    <td>{{ median.howto_ratio }}</td>
+    <td>{{ median.tag_overlap }}</td>
+    <td>{{ median.centrality }}</td>
+    <td>{{ median.seo_avg }}</td>
+    <td>{{ median.seo_median }}</td>
+    <td class="muted">—</td>
+    <td>{{ median.scored }}</td>
+  </tr>
+  </tbody>
+</table>

@@ -1,0 +1,39 @@
+<div class="grid" id="counts"
+     hx-get="/home/counts" hx-trigger="every 30s" hx-swap="outerHTML">
+  <div class="card">
+    <div class="k">Videos</div>
+    <div class="v">{{ videos }}</div>
+  </div>
+  <div class="card">
+    <div class="k">Channels</div>
+    <div class="v">{{ channels }}</div>
+  </div>
+  <div class="card">
+    <div class="k">Scored</div>
+    <div class="v">{{ scores }}</div>
+  </div>
+  <div class="card">
+    <div class="k">Ideas</div>
+    <div class="v">{{ ideas }}</div>
+  </div>
+  <div class="card">
+    <div class="k">API quota</div>
+    <div class="v">{{ quota_used }}<span class="muted" style="font-size:13px"> / {{ quota_limit }}</span></div>
+  </div>
+  <div class="card {% if integrity_ok %}ok{% else %}bad{% endif %}">
+    <div class="k">Integrity</div>
+    <div class="v" style="font-size:15px; padding-top:6px">{{ integrity }}</div>
+  </div>
+  <div class="card">
+    <div class="k">Last ingest</div>
+    <div class="v" style="font-size:13px; padding-top:6px">{{ last_ingest }}</div>
+  </div>
+  <div class="card">
+    <div class="k">Stale channels</div>
+    <div class="v">{{ stale }}</div>
+  </div>
+  <div class="card">
+    <div class="k">Index fresh</div>
+    <div class="v {% if index_fresh %}ok{% else %}bad{% endif %}">{% if index_fresh %}yes{% else %}no{% endif %}</div>
+  </div>
+</div>

@@ -1,0 +1,17 @@
+{% import "dashboard/macros.html" as ui %}
+
+<h1>Ideas</h1>
+
+<table>
+  <thead>
+    <tr><th>Idea</th><th>Score</th><th>Status</th><th>Source</th><th>Created</th><th>Mark</th></tr>
+  </thead>
+  <tbody>
+  {% for row in rows %}
+    {% call ui::idea_row(row) %}
+  {% else %}
+    <tr><td colspan="6" class="muted">No ideas yet — run <code>tubeforge ideas</code> to generate the pool.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p class="muted">Status changes persist immediately (same write path as <code>tubeforge ideas --status</code>).</p>

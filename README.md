@@ -60,7 +60,41 @@ agent/script consumption.
 | `tubeforge export --format zip\|dir` | Deterministic export: CSVs + JSON arrays + manifest |
 | `tubeforge filmot get <id>` | Opt-in Filmot recovery lookup (needs `TUBEFORGE_FILMOT_KEY`) |
 | `tubeforge thumbnail render\|list-templates` | 1280×720 PNG thumbnails via headless Chromium |
+| `tubeforge serve [--port] [--host]` | Local HTMX dashboard (see below) |
 | `tubeforge mcp` | Print `.mcp.json` snippet for agent integration |
+
+## Dashboard (HTMX)
+
+`tubeforge serve` starts a local, server-rendered dashboard — the deferred
+PRD §5.4 item. Pages: dashboard home (health-card grid that auto-refreshes
+every 30 s, latest alerts, top ideas, inline-SVG charts), scores (top-100
+table with title filter and row-expand showing all 17 SEO/GEO components),
+ideas (status marking via HTMX POST), keyword rank trends (with position
+sparklines), alerts (mark-read / clear), competitor scorecard, and the full
+health report. htmx 2.0.9 is vendored in `static/` and served locally —
+offline-first, no CDN. Charts are server-rendered inline SVG generated in
+Rust (no JavaScript chart library; PRD §11).
+
+```sh
+tubeforge serve                      # http://127.0.0.1:8080
+tubeforge serve --port 9000          # custom port (TUBEFORGE_SERVE_PORT env)
+```
+
+**Local-first contract** (please read before using):
+
+- **Loopback only.** The server binds `127.0.0.1` by default and refuses
+  non-loopback hosts (`--host localhost` / `::1` allowed). It is single-user
+  with **no authentication** — do not expose it to a network.
+- **CSRF guard.** Mutating endpoints (idea status, alert read/clear) reject
+  requests whose `Origin`/`Referer` host does not match the bound address
+  (403). Requests with neither header are accepted (local scripts/agents).
+- **Single writer.** The server opens one database connection for reads and
+  reuses the CLI's write paths. Running `serve` concurrently with writing
+  commands (`ingest`, `refresh`, `score`, `keywords check`, …) is
+  unsupported; concurrent *readers* are fine (WAL).
+- **stdout purity.** `serve` is long-running and never emits the JSON
+  envelope (LLD §4.2): the listening line goes to stderr. Ctrl-C shuts down
+  cleanly.
 
 ## Configuration (`.env`)
 
@@ -71,6 +105,7 @@ for the full key list:
 
 - Paths/data: `TUBEFORGE_DB_PATH`, `TUBEFORGE_DATA_DIR`, `TUBEFORGE_BACKUP_DIR`,
   `TUBEFORGE_BACKUP_KEEP`, `TUBEFORGE_QUOTA_WARN_AT`, `TUBEFORGE_STALE_DAYS`
+- Dashboard: `TUBEFORGE_SERVE_PORT` (default 8080; `serve --port` wins)
 - Scoring: `TUBEFORGE_WEIGHTS_SEO`, `TUBEFORGE_WEIGHTS_GEO`, and per-component
   overrides (`TUBEFORGE_SEO_*`, `TUBEFORGE_GEO_*` — sums normalized at use time)
 - Thumbnails: `TUBEFORGE_CHROMIUM_DIR` (pinned Chromium install dir,

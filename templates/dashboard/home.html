@@ -1,0 +1,29 @@
+<h1>Dashboard</h1>
+
+{{ counts_html|safe }}
+
+<div class="cols2">
+  <section>
+    <h2>Views per channel</h2>
+    {{ views_chart|safe }}
+  </section>
+  <section>
+    <h2>SEO score distribution</h2>
+    {{ seo_chart|safe }}
+  </section>
+</div>
+
+<section>
+  <h2>Latest alerts</h2>
+  {{ alerts_html|safe }}
+</section>
+
+<section>
+  <h2>Top ideas</h2>
+  <table>
+    <thead><tr><th>Idea</th><th>Score</th><th>Status</th><th>Source</th></tr></thead>
+    <tbody>
+      {{ ideas_html|safe }}
+    </tbody>
+  </table>
+</section>

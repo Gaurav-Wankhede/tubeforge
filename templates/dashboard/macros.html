@@ -1,0 +1,17 @@
+{% macro idea_row(row) %}
+<tr id="idea-{{ row.id }}">
+  <td>{{ row.title }}</td>
+  <td><strong>{{ row.score }}</strong></td>
+  <td><span class="badge {{ row.status }}">{{ row.status }}</span></td>
+  <td class="muted">{{ row.source }}</td>
+  <td class="muted">{{ row.created }}</td>
+  <td>
+    <button hx-post="/ideas/{{ row.id }}/draft" hx-target="#idea-{{ row.id }}" hx-swap="outerHTML"
+            {% if row.status == "draft" %}disabled{% endif %}>draft</button>
+    <button hx-post="/ideas/{{ row.id }}/saved" hx-target="#idea-{{ row.id }}" hx-swap="outerHTML"
+            {% if row.status == "saved" %}disabled{% endif %}>saved</button>
+    <button hx-post="/ideas/{{ row.id }}/discarded" hx-target="#idea-{{ row.id }}" hx-swap="outerHTML"
+            {% if row.status == "discarded" %}disabled{% endif %}>discarded</button>
+  </td>
+</tr>
+{% endmacro %}

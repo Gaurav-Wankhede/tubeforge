@@ -143,6 +143,18 @@ pub enum Command {
         #[command(subcommand)]
         kind: FilmotKind,
     },
+    /// Serve the local HTMX dashboard (PRD §5.4 deferred item).
+    ///
+    /// Long-running server: binds loopback only, never emits the JSON
+    /// envelope (stdout stays empty; the listening line goes to stderr).
+    Serve {
+        /// Listen port (default 8080; TUBEFORGE_SERVE_PORT overrides).
+        #[arg(long, value_name = "PORT")]
+        port: Option<u16>,
+        /// Bind host — loopback only (127.0.0.1, localhost or ::1).
+        #[arg(long, value_name = "HOST", default_value = "127.0.0.1")]
+        host: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -284,6 +296,7 @@ impl Cli {
             Command::Filmot { kind } => match kind {
                 FilmotKind::Get { .. } => "filmot get",
             },
+            Command::Serve { .. } => "serve",
         }
     }
 }

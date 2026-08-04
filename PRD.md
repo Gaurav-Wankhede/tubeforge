@@ -1,6 +1,6 @@
 **Product Requirements Document (PRD)**  
 **Project Name:** **TubeForge**  
-**Version:** 3.13 (Phases 0–3 Complete)  
+**Version:** 3.14 (Phases 0–3 Complete; Phase 4 in progress)  
 **Date:** August 4, 2026  
 **Status:** Ready for Implementation (Phase 4)  
 **Intended License:** MIT or Apache-2.0 (all dependencies permissive: Turso MIT, tantivy MIT)
@@ -18,14 +18,14 @@
 - **Turso Database** (embedded, MIT) — a from-scratch SQLite re-implementation in Rust: single-file `.db`, SQLite file-format compatible, zero-configuration, durable, crash-safe in normal operation, portable back to SQLite at any time.
 - **BM25 full-text scoring** via the **tantivy** crate (owned by TubeForge's Rust code, not the engine's experimental index modules).
 - **Vector similarity** (brute-force cosine in Rust) and **graph analytics** (PageRank in Rust).
-- All analytics computed locally in pure Rust; the HTMX Dashboard is deferred (CLI-only v1).
+- All analytics computed locally in pure Rust; HTMX dashboard **delivered** Aug 4, 2026 via `tubeforge serve` (§5.4, loopback-only).
 
 **Core Design Principles**
 - Free options only (no monetary charges ever).
 - Optional free YouTube Data API for rich metadata (user-controlled via `.env`).
 - Primary focus on **SEO + GEO** for perfect Titles, Descriptions, Tags, and Video Strategies.
 - Support for bulk Channel (RSS) and Video Link ingestion.
-- CLI-first with structured JSON output; HTMX dashboard deferred to post-v1.
+- CLI-first with structured JSON output; HTMX dashboard delivered (`tubeforge serve`, loopback-only).
 - Fully local and private.
 - All configuration in `.env`.
 - Pure Rust backend (tokio) + embedded Turso Database + tantivy.
@@ -66,7 +66,7 @@ Enable creators to produce highly optimized Titles, Descriptions, Tags, and cont
 - Free data sources only: Official RSS + oEmbed (always) + optional free YouTube Data API (user-provided key).
 - Strong SEO + GEO focus for Title, Description, Tags, and Video Strategy.
 - Bulk Video Link Ingestion and Channel management via text input.
-- CLI-first: `init`, `ingest`, `score`, `ideas`, `keywords`, `scorecard`, `health`, `alerts`, `backup`, `quota`, `reindex`.
+- CLI-first: `init`, `ingest`, `score`, `ideas`, `keywords`, `scorecard`, `health`, `alerts`, `backup`, `quota`, `reindex`, `serve` (HTMX dashboard).
 - Embedded Turso Database (SQLite-compatible single file) + tantivy BM25 + Rust vector/graph analytics.
 - Cross-platform (macOS first-class; Linux, Windows).
 - Thumbnail Generator (Phase 3; HTML + Tailwind + mandatory cleanup).
@@ -74,7 +74,7 @@ Enable creators to produce highly optimized Titles, Descriptions, Tags, and cont
 - All feature groups listed in Section 5.
 
 **Out of Scope (v1)**
-- HTMX dashboard (deferred post-v1).
+- ~~HTMX dashboard (deferred post-v1)~~ → **DELIVERED (Aug 4, 2026):** `tubeforge serve` — see §5.4.
 - Any paid API or paid data source.
 - Page scraping of YouTube watch pages or channels.
 - Multi-tenant SaaS.
@@ -109,8 +109,15 @@ Enable creators to produce highly optimized Titles, Descriptions, Tags, and cont
 - Idempotent upsert semantics; rich source wins on conflict (api > oembed > rss).
 - All data stored in the single embedded `.db` and linked for analysis.
 
-#### 5.4 Dashboard (Deferred)
-- HTMX Dashboard with Data Analysis and Charts deferred to post-v1 (CLI tables + `--json` in v1; `serve` subcommand later).
+#### 5.4 Dashboard (~~Deferred~~ ✅ DELIVERED, Aug 4, 2026)
+- HTMX Dashboard with Data Analysis and Charts **delivered** as `tubeforge serve [--port 8080] [--host 127.0.0.1]` (was deferred post-v1; implemented in Phase 4).
+- **Loopback-only** binding (127.0.0.1 default; `localhost`/`::1` allowed; any non-loopback `--host` → rejected, exit 2). Port precedence: flag > `TUBEFORGE_SERVE_PORT` > 8080. Single-user, no auth.
+- **htmx 2.0.9 vendored** (`static/htmx.min.js`, offline — no CDN). Server: Axum 0.8.9 + askama 0.14 templates (compile-time autoescaping).
+- **Pages:** `/` dashboard home (health cards + 30s htmx polling + SVG charts), `/scores` (17-component drilldown via hx-get expand), `/ideas` (status buttons via hx-post + outerHTML swap), `/keywords` (rank trends + SVG sparklines), `/alerts` (clear via POST), `/scorecard`, `/health`, `/healthz` (plain "ok").
+- **CSRF policy:** POSTs guarded by Origin/Referer check — presented origin's host:port must match the bound address (mismatch → 403); absent headers allowed (curl/scripts/agents can't be browser-CSRF'd).
+- **Charts:** server-rendered inline SVG in Rust (views-per-channel bars, SEO-score histogram, keyword sparklines) — no JS chart libraries (resolves §11 charting question).
+- **Concurrency caveat (single-writer):** `serve` opens one shared Db (axum state) and mutates only via CLI code paths; do NOT run `serve` concurrently with writing CLI commands (WAL readers fine).
+- **`--json` note:** `serve` is the one command that does NOT emit the JSON envelope — it is long-running and stdout stays empty (listening line → stderr); agent_contract suite untouched.
 
 #### 5.5 Grow Audience
 - Next Ideas, Saved Ideas (draft/saved/discarded), Niches.
@@ -153,7 +160,7 @@ Enable creators to produce highly optimized Titles, Descriptions, Tags, and cont
 Pure Rust • Harness CLI / OpenCode • Tokio only.
 
 **Backend**  
-Single binary CLI (clap + tokio). No server, no daemon, no ports. HTMX dashboard deferred.
+Single binary CLI (clap + tokio). One optional long-running process: `tubeforge serve` (loopback-only HTMX dashboard, §5.4); everything else daemon-free, no ports.
 
 **Storage — Embedded Turso Database (MIT, SQLite-in-Rust)**  
 - Single-file `.db`, SQLite file-format compatible — portable to/from SQLite (tested escape hatch).
@@ -186,7 +193,7 @@ Native binaries for macOS (first), Linux, Windows. Wasm deferred.
 - Zero monetary charges at all times.
 - Optional rich metadata via free YouTube Data API (user-controlled).
 - SEO/GEO first.
-- CLI-first with stable JSON contracts; dashboard deferred.
+- CLI-first with stable JSON contracts; HTMX dashboard delivered (`serve` — the one long-running, non-JSON-envelope command).
 - Single-file portable storage with tested SQLite escape hatch.
 - Cross-platform (macOS first; Linux, Windows).
 - Agent-operable (`--json`, exit codes, MCP).
@@ -221,7 +228,7 @@ Full scoring engine (10 SEO + 7 GEO components, env-configurable weights, defaul
 Thumbnail Generator (`tubeforge thumbnail render|list-templates`; HTML + Tailwind CSS v4 templates, rendered by headless Chromium via **chromiumoxide 0.9.1** + pinned fetcher-downloaded Chromium into `<TUBEFORGE_DATA_DIR>/chromium/`, 1280×720 PNG; **mandatory `/assets` cleanup** via RAII Drop guard + error-path cleanup, `--keep-assets` debug-only) — resolves the §11 HTML-to-image open question, `check availability` (batched `videos.list` part=snippet,status; missing IDs → `video_unavailable` alerts; `privacy_status` column via migration 003, SCHEMA_VERSION 2→3, health `privacy` census), `export` (`--format zip|dir`; manifest.json + videos.csv 19 cols + channels/tags/keywords/keyword_rankings CSVs + JSON arrays; zip crate 8.6, deterministic), `filmot get` (opt-in `TUBEFORGE_FILMOT_KEY`, raw JSON passthrough, no DB writes, third-party service), agent interface hardening (stdout/stderr separation, `list_alerts(0)` LIMIT fix, nested `check availability`, `all_ideas()`, `tests/agent_contract.rs` 11 binary-level `--json` contract tests), **135/135 tests + 1 ignored (Chromium-gated render), clippy clean**. **Next: Phase 4 (Hardening & Release).**
 
 **Phase 4 – Hardening & Release**  
-**IN PROGRESS (Aug 4, 2026)** — done: performance smoke gate built + **PASSED on M4** (5k videos: ingest 20.2s + reindex 0.2s + ideas 0.06s = 20.5s vs 30s budget, release profile, `cargo test --release --test perf_gate -- --ignored`); release prep (LICENSE-MIT/LICENSE-APACHE, Cargo.toml metadata incl. rust-version 1.85 + license field, CHANGELOG 0.1.0, GitHub Actions CI matrix macOS-14/ubuntu/windows: build+clippy+test, README command table + cross-platform notes); cargo audit clean; cargo deny clean. **Remaining:** user actions (create GitHub repo, set remote, push, tag v0.1.0) + fmt pass (deferred, optional).
+**IN PROGRESS (Aug 4, 2026)** — done: performance smoke gate built + **PASSED on M4** (5k videos: ingest 20.2s + reindex 0.2s + ideas 0.06s = 20.5s vs 30s budget, release profile, `cargo test --release --test perf_gate -- --ignored`); release prep (LICENSE-MIT/LICENSE-APACHE, Cargo.toml metadata incl. rust-version 1.85 + license field, CHANGELOG 0.1.0, GitHub Actions CI matrix macOS-14/ubuntu/windows: build+clippy+test, README command table + cross-platform notes); cargo audit clean; cargo deny clean; **HTMX dashboard delivered** (§5.4 — `tubeforge serve`, loopback-only, vendored htmx 2.0.9, CSRF-guarded POSTs, inline SVG charts; 165/165 tests + 2 ignored, clippy clean). **Remaining:** user actions (create GitHub repo, set remote, push, tag v0.1.0) + fmt pass (deferred, optional).
 Performance, documentation, cross-platform testing (Linux, Windows), public open-source release of **TubeForge** (MIT/Apache-2.0).
 
 ### 10. Assumptions & Risks
@@ -240,7 +247,7 @@ Official RSS, oEmbed, and free YouTube Data API remain available • User unders
 
 ### 11. Open Questions
 - ~~Exact on-disk format~~ → **Resolved:** Turso/SQLite `.db`, single file.
-- ~~Preferred lightweight charting approach~~ → **Deferred** with dashboard.
+- ~~Preferred lightweight charting approach~~ → **Resolved (Aug 4, 2026):** server-rendered inline SVG in Rust (views-per-channel bars, SEO-score histogram, keyword sparklines) — no JS chart libraries.
 - ~~Preferred HTML-to-image method for thumbnails (SVG+resvg vs headless Chromium)~~ → **Resolved (Aug 4, 2026):** headless Chromium via **chromiumoxide 0.9.1** — literal HTML+Tailwind v4 rendering, Blink determinism, chromiumoxide_fetcher-pinned Chromium (no system Chrome dependency), MIT/Apache-2.0, actively maintained.
 - ~~Degree of Wasm support in v1~~ → **Resolved:** deferred post-v1.
 - ~~Default local UI authentication~~ → **Not applicable:** CLI-only v1.
@@ -260,6 +267,8 @@ This is the complete Product Requirements Document (Version 3.9 — Refined).
 **v3.12 update (Aug 4, 2026):** Implementation status — **Phase 3 ✅ complete** (thumbnail generator via chromiumoxide + pinned Chromium with mandatory `/assets` cleanup, `check availability` + `privacy_status` migration 003, `export` with CSVs/ZIP, Filmot opt-in recovery, agent interface hardening — 135/135 tests + 1 ignored Chromium-gated, clippy clean). Next: **Phase 4 — Hardening & Release.**
 
 **v3.13 update (Aug 4, 2026):** Implementation status — **Phase 4 — IN PROGRESS** — performance smoke gate **PASSED on M4** (5k videos: ingest 20.2s + reindex 0.2s + ideas 0.06s = 20.5s vs 30s budget, release profile); release prep complete (LICENSE-MIT/LICENSE-APACHE, Cargo.toml metadata, CHANGELOG 0.1.0, CI matrix macOS-14/ubuntu/windows, README command table + cross-platform notes); cargo audit + cargo deny clean; 136/136 tests + 2 ignored (perf gate + Chromium render), clippy clean. Remaining: user actions (repo creation, push, tag v0.1.0) + optional fmt pass.
+
+**v3.14 update (Aug 4, 2026):** Implementation status — **Phase 4 — IN PROGRESS** — the deferred §5.4 HTMX dashboard is **✅ DELIVERED**: `tubeforge serve [--port] [--host]` (loopback-only; non-loopback host → exit 2; `TUBEFORGE_SERVE_PORT` env), Axum 0.8.9 + askama 0.14 (compile-time autoescaping) + vendored htmx 2.0.9 (`static/htmx.min.js`, offline), pages `/` `/scores` `/ideas` `/keywords` `/alerts` `/scorecard` `/health` `/healthz`, CSRF origin guard on POSTs (mismatch → 403; absent headers allowed for curl/agents), server-rendered inline SVG charts (no JS libs), single-writer Db caveat (don't run alongside writing CLI commands; WAL readers fine), `serve` emits no JSON envelope (stdout stays empty). 165/165 tests + 2 ignored (perf gate + Chromium render), clippy clean, cargo-deny green.
 
 **Key updates introduced in v3.9 (retained):**
 - **Storage:** custom "from scratch" database replaced with embedded **Turso Database** (MIT, SQLite-in-Rust): single-file `.db`, SQLite-compatible, portable back to SQLite (tested escape hatch).

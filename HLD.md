@@ -28,7 +28,7 @@ All heavy lifting that must be *correct* (BM25 ranking, vector similarity, graph
 - Mac mini M4 (macOS arm64) primary target; Linux/Windows later.
 
 ### Non-Goals (v1)
-- HTMX dashboard (deferred; `serve` subcommand post-v1).
+- HTMX dashboard — **delivered (Aug 4, 2026)** as `tubeforge serve` (loopback-only, vendored htmx 2.0.9, inline SVG charts — PRD §5.4); still a local single-user server, not a multi-tenant web app.
 - Wasm build (deferred; possible later — Turso has Wasm bindings, FTS needs opt-in `wasm-fts`).
 - ANN vector indexing (Turso roadmap item #832; unnecessary at 1–10k rows).
 - ML/GNN models (graph analytics via PageRank-class algorithms; GNN deferred indefinitely).
@@ -100,6 +100,7 @@ All heavy lifting that must be *correct* (BM25 ranking, vector similarity, graph
 | Analytics | `scoring` | SEO score (BM25 signals + title/desc/tag heuristics) + GEO score (free signals) → 0–100 composite, components JSON |
 | Analytics | `graph` | Competitor edges → PageRank-style centrality; Next Ideas ranking |
 | Analytics | `reports` | scorecard, health report, keyword rank tracking, brand alerts |
+| Interface | `serve` | HTMX dashboard server (delivered): loopback-only axum router, askama templates, CSRF origin guard on POSTs, inline SVG charts; long-running — no JSON envelope, stdout stays empty |
 | Config | `config` | `.env` loading, `TUBEFORGE_DB_PATH` resolution, weights overrides |
 
 ---
@@ -146,6 +147,16 @@ agent → tubeforge score --draft-title "..." --json  → structured envelope
 agent → tursodb ~/.tubeforge/tubeforge.db --mcp     → 9 MCP tools
 ```
 
+### 5.5 Dashboard flow (serve — delivered)
+```
+tubeforge serve --port 8080
+  → bind 127.0.0.1:8080 (loopback only; non-loopback host → exit 2)
+  → GET / → health cards + 30s htmx polling + inline SVG charts
+  → hx-get /scores/{id} → 17-component drilldown fragment
+  → hx-post /ideas/{id}/{status} · /alerts/clear → CSRF origin guard → DB mutation
+  → single shared Db (single-writer caveat); stdout empty; Ctrl-C clean shutdown
+```
+
 ---
 
 ## 6. Data Source Policy (locked)
@@ -190,7 +201,7 @@ COMPAT.md guarantee: *"You should always be able to go back to SQLite."* If stor
 
 ## 9. Deployment & Topology
 
-- **Single process, zero ports, zero daemons.** No server, no DB process, no browser.
+- **Single process, zero ports, zero daemons** (except the optional loopback dashboard server, §5.5). No DB process, no browser.
 - Data root: `~/.tubeforge/` → `tubeforge.db`, `index/` (tantivy), `backups/`, `.env`.
 - Override: `TUBEFORGE_DB_PATH`.
 - Target: macOS arm64 (M4) first-class; Linux x86_64/arm64; Windows later (Turso cross-platform; note simsimd/aegis C deps compile on macOS without extra tooling).
@@ -203,7 +214,7 @@ COMPAT.md guarantee: *"You should always be able to go back to SQLite."* If stor
 |---|---|---|
 | Reliability | No silent data loss | Pre-ingest backup (VACUUM INTO + integrity_check); WAL mode; pinned version; watchlist; rusqlite escape |
 | Performance | Interactive CLI (<2s typical) | 1–10k row corpus; tantivy <10ms startup; brute-force cosine in ms; no ANN needed |
-| Security | Local-only secrets | `.env` only; no network listeners; YouTube API key never logged |
+| Security | Local-only secrets | `.env` only; the only network listener is the loopback-only dashboard (`serve`, 127.0.0.1, CSRF-guarded POSTs); YouTube API key never logged |
 | Privacy | All data local | No telemetry; no cloud |
 | Portability | Data readable elsewhere | SQLite `.db` format; `--json` output |
 | Agent-operability | Deterministic machine interface | JSON envelope, documented exit codes, MCP |
@@ -234,7 +245,7 @@ COMPAT.md guarantee: *"You should always be able to go back to SQLite."* If stor
 | 1 | ✅ COMPLETE — Fetch (RSS/oEmbed/API+quota), Ingest, Storage (schema, migrations), tantivy index, backup, CLI: ingest/score(basic)/backup/quota, MCP integration |
 | 2 | Scoring engine (SEO+GEO), ideas, keywords, scorecard, health, alerts, graph analytics |
 | 3 | ✅ COMPLETE (Aug 4, 2026) — Thumbnail generator (HTML→image via chromiumoxide headless Chromium + `/assets` cleanup), `check availability` (privacy census, migration 003), `export` (CSV/ZIP), Filmot opt-in recovery, agent interface hardening |
-| 4 | **IN PROGRESS (Aug 4, 2026)** — perf gate passed (5k videos < 30s on M4, release profile), release prep done (LICENSE files, Cargo.toml metadata, CHANGELOG, README, .gitignore), CI matrix macOS-14/ubuntu/windows (build+clippy+test); release pending repo push + tag v0.1.0 |
+| 4 | **IN PROGRESS (Aug 4, 2026)** — perf gate passed (5k videos < 30s on M4, release profile), release prep done (LICENSE files, Cargo.toml metadata, CHANGELOG, README, .gitignore), CI matrix macOS-14/ubuntu/windows (build+clippy+test); **HTMX dashboard delivered (`tubeforge serve`** — loopback-only, vendored htmx 2.0.9, inline SVG charts, CSRF-guarded POSTs, single-writer caveat); release pending repo push + tag v0.1.0 |
 
 ---
 
@@ -247,7 +258,7 @@ COMPAT.md guarantee: *"You should always be able to go back to SQLite."* If stor
 | ADR-3 | **Vector = brute-force cosine in Rust** | Turso vector ANN (doesn't exist, #832); sqlite-vec (pre-v1 alpha) |
 | ADR-4 | **Graph = Rust adjacency + PageRank** | SQL recursive CTEs (unsupported); GNN (no requirement) |
 | ADR-5 | **WAL mode, never MVCC** | MVCC (#7596 corruption, #7800 index rejection) |
-| ADR-6 | **CLI-only v1** | HTMX dashboard (deferred) |
+| ADR-6 | **CLI-only v1** | HTMX dashboard — deferred at the time, **delivered Aug 4, 2026** as `tubeforge serve` (loopback-only; still no multi-tenant/auth surface — CSRF origin guard is the only cross-origin protection) |
 | ADR-7 | **Backup before every batch ingest** (VACUUM INTO + integrity_check) | Trusting pre-1.0 durability |
 | ADR-8 | **MCP via tursodb CLI** (external) | In-process MCP server (scope) |
 | ADR-9 | **No embeddings in v1** (lexical BM25 + token overlap only) | Embedding pipelines (scope; revisit post-v1) |

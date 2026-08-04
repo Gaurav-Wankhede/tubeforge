@@ -1,0 +1,58 @@
+<h1>Health report</h1>
+<p class="muted">Same data as <code>tubeforge health</code> (completeness, quota, integrity, freshness).</p>
+
+<div class="grid">
+  {% for (label, value) in counts %}
+    <div class="card">
+      <div class="k">{{ label }}</div>
+      <div class="v">{{ value }}</div>
+    </div>
+  {% endfor %}
+</div>
+
+<h2>Quota</h2>
+<div class="grid">
+  <div class="card">
+    <div class="k">Videos.list used</div>
+    <div class="v">{{ quota_used }}<span class="muted" style="font-size:13px"> / {{ quota_limit }}</span></div>
+  </div>
+  <div class="card">
+    <div class="k">Ledger date</div>
+    <div class="v" style="font-size:13px; padding-top:6px">{{ quota_date }}</div>
+  </div>
+</div>
+
+<h2>Integrity &amp; freshness</h2>
+<table>
+  <tbody>
+    <tr><th>Integrity check</th><td class="{% if integrity_ok %}ok{% else %}bad{% endif %}">{{ integrity }}</td></tr>
+    <tr><th>Last ingest</th><td>{{ last_ingest }}</td></tr>
+    <tr><th>Index fresh (reindex ≥ last ingest)</th><td class="{% if index_fresh %}ok{% else %}bad{% endif %}">{% if index_fresh %}yes{% else %}no{% endif %}</td></tr>
+    <tr><th>Last reindex</th><td>{{ index_last }}</td></tr>
+  </tbody>
+</table>
+
+<h2>Stale channels (&gt; {{ stale_days }} days)</h2>
+<table>
+  <thead><tr><th>Channel</th><th>Title</th><th>Fetched</th></tr></thead>
+  <tbody>
+  {% for (channel_id, title, fetched_at) in stale %}
+    <tr><td class="muted">{{ channel_id }}</td><td>{{ title }}</td><td class="muted">{{ fetched_at }}</td></tr>
+  {% else %}
+    <tr><td colspan="3" class="muted">None — everything is fresh.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2>Metadata completeness</h2>
+<table>
+  <tbody>
+    <tr><th>Engagement complete</th><td>{{ engagement_complete }}%</td></tr>
+    <tr><th>Disabled-metric videos</th><td>{{ disabled_videos }}</td></tr>
+    <tr><th>Disabled view_count</th><td>{{ disabled_view }}</td></tr>
+    <tr><th>Disabled like_count</th><td>{{ disabled_like }}</td></tr>
+    <tr><th>Disabled comment_count</th><td>{{ disabled_comment }}</td></tr>
+    <tr><th>Privacy: unlisted</th><td>{{ privacy_unlisted }}</td></tr>
+    <tr><th>Privacy: private</th><td>{{ privacy_private }}</td></tr>
+  </tbody>
+</table>

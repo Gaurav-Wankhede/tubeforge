@@ -18,6 +18,7 @@ pub mod ingest;
 pub mod output;
 pub mod scoring;
 pub mod search;
+pub mod serve;
 pub mod storage;
 pub mod thumbnail;
 pub mod util;

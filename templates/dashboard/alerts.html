@@ -1,0 +1,11 @@
+<h1>Alerts</h1>
+
+<div class="flex">
+  <button hx-post="/alerts/read" hx-target="#alerts-list" hx-swap="outerHTML"
+          {% if unread == 0 %}disabled{% endif %}>Mark all read</button>
+  <button hx-post="/alerts/clear" hx-target="#alerts-list" hx-swap="outerHTML"
+          {% if count == 0 %}disabled{% endif %}>Clear all</button>
+  <span class="muted">{{ unread }} unread</span>
+</div>
+
+{{ list_html|safe }}

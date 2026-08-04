@@ -1,0 +1,12 @@
+{% if rows.is_empty() %}
+  <tr><td class="muted" colspan="4">No ideas yet — run <code>tubeforge ideas</code>.</td></tr>
+{% else %}
+  {% for row in rows %}
+    <tr>
+      <td>{{ row.title }}</td>
+      <td><strong>{{ row.score }}</strong></td>
+      <td><span class="badge {{ row.status }}">{{ row.status }}</span></td>
+      <td class="muted">{{ row.source }}</td>
+    </tr>
+  {% endfor %}
+{% endif %}

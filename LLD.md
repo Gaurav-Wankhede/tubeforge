@@ -1,9 +1,9 @@
 # TubeForge — Low-Level Design (LLD)
 
 **Project:** TubeForge — local-first YouTube SEO/GEO growth engine
-**Document version:** 1.4 | **Date:** August 4, 2026
+**Document version:** 1.5 | **Date:** August 4, 2026
 **Status:** Approved — Phases 0–3 delivered; implementation reference for Phase 4+ (Phase 4 in progress)
-**Companion documents:** `PRD.md` (v3.13), `HLD.md`
+**Companion documents:** `PRD.md` (v3.14), `HLD.md`
 
 ---
 
@@ -68,15 +68,26 @@ tubeforge/
 │   ├── export/
 │   │   ├── mod.rs              # manifest.json + JSON arrays
 │   │   └── csv.rs              # videos/channels/tags/keywords CSV writers (escaping)
+│   ├── serve/                  # HTMX dashboard server (PRD §5.4, delivered)
+│   │   ├── mod.rs              # axum router, handlers, health/pages endpoints
+│   │   ├── csrf.rs             # Origin/Referer CSRF guard for POSTs
+│   │   ├── svg.rs              # server-rendered inline SVG charts (bars/histogram/sparklines)
+│   │   └── templates.rs        # askama template types (compile-time autoescaping)
 │   ├── templates/
 │   │   ├── default.html input.css tailwind.css   # compiled Tailwind v4 CSS committed
+│   │   └── dashboard/          # askama 0.14 HTML templates: base.html, home.html, home_counts.html,
+│   │                           #   home_ideas.html, scores.html, score_detail.html, ideas.html,
+│   │                           #   idea_row.html, keywords.html, scorecard.html, alerts.html,
+│   │                           #   alerts_list.html, health.html, macros.html, not_found.html
+│   ├── static/                 # vendored assets (offline, no CDN)
+│   │   └── htmx.min.js         # htmx 2.0.9 (pinned, source URL documented in header)
 │   └── commands/               # one file per CLI subcommand
 │       ├── init.rs ingest.rs score.rs ideas.rs keywords.rs
 │       ├── scorecard.rs health.rs alerts.rs backup.rs quota.rs reindex.rs
-│       ├── thumbnail.rs availability.rs export.rs filmot.rs
+│       ├── thumbnail.rs availability.rs export.rs filmot.rs serve.rs
 └── tests/
     ├── fixtures/               # local HTTP server (wiremock) RSS/oEmbed/API payloads
-    └── *.rs                    # integration + property tests
+    └── *.rs                    # integration + property tests (incl. serve.rs — dashboard HTTP suite)
 ```
 
 **Dependency rule:** `commands` → domain modules → `storage`/`search` (leaf). `storage` is the only module importing `turso`; `search` is the only module importing `tantivy`.
@@ -264,7 +275,7 @@ CREATE TABLE meta (                           -- key/value store
 | `check availability` | Batched `videos.list` (part=snippet,status); missing IDs → `video_unavailable` alerts; records `privacy_status` | `--json` |
 | `export` | Export DB to `--format zip\|dir`: manifest.json, videos.csv (19 cols), channels.csv, tags.csv, keywords.csv, keyword_rankings.csv + JSON arrays (videos, ideas, alerts, scores); deterministic zip archives | `--format`, `--output`, `--json` |
 | `filmot get` | Opt-in recovery lookup via Filmot API (`TUBEFORGE_FILMOT_KEY`); raw JSON passthrough + tolerant summary; no DB writes; non-fatal. Empty key → exit 1 CONFIG error | `--video-id`, `--json` |
-| `serve` | **Deferred** (HTMX dashboard) | — |
+| `serve` | HTMX dashboard (PRD §5.4, delivered): bind loopback, serve until Ctrl-C. **Long-running — does NOT emit the JSON envelope; stdout stays empty** (listening line → stderr; `--json` ignored). One shared Db; single-writer caveat — do not run concurrently with writing CLI commands (WAL readers fine) | `--port` (default 8080; `TUBEFORGE_SERVE_PORT` overrides), `--host` (loopback only: `127.0.0.1`/`localhost`/`::1`; non-loopback → rejected, exit 2) |
 
 Global: `--json`, `--verbose`, `--db-path`, `--config <env file>`.
 
@@ -309,6 +320,32 @@ enum TubeforgeError {
 }
 ```
 Mapping: `From<TubeforgeError> for i32` centralizes exit codes. Errors always render in the JSON envelope under `error`, and human mode prints `code: message` on stderr.
+
+### 4.5 HTMX Dashboard (`serve` — PRD §5.4, delivered Aug 4, 2026)
+
+**Stack:** Axum 0.8.9 (tokio) + askama 0.14 templates (compile-time autoescaping) + vendored htmx 2.0.9. Charts are server-rendered inline SVG from Rust (`serve/svg.rs`) — **no JS chart libraries** (PRD §11 resolved).
+
+**Routes** (single router in `serve/mod.rs`):
+
+| Path | Content |
+|---|---|
+| `/` | Dashboard home — health cards + 30s htmx polling fragments (`/home/counts`, `/home/ideas`) + SVG charts |
+| `/scores` | Scores list; `/scores/{id}` drilldown fragment — 17-component breakdown via hx-get expand |
+| `/ideas` | Idea rows; `/ideas/{id}/{status}` hx-post → outerHTML swap (draft/saved/discarded) |
+| `/alerts` | Alert list; `/alerts/read`, `/alerts/clear` POSTs |
+| `/keywords` | Rank trends per keyword + SVG sparklines |
+| `/scorecard` | Competitor scorecard table |
+| `/health` | Health report page (census etc.) |
+| `/healthz` | Plain `ok` (no envelope, no HTML) — liveness probe |
+| `/static/htmx.min.js` | Vendored htmx 2.0.9, offline (no CDN) |
+
+**CSRF policy** (`serve/csrf.rs`): loopback server has no auth — remaining risk is local CSRF (malicious webpage POSTing to `127.0.0.1:<port>`). Origin guard on POSTs: `Origin`/`Referer` host:port must match the bound address (`localhost` ≡ `127.0.0.1`; scheme http/https) → mismatch or unparseable (`Origin: null`) → **403**. Neither header present → allowed (curl/scripts/AI agents send no Origin and can't be browser-CSRF'd).
+
+**Concurrency (single-writer caveat):** `serve` opens ONE shared Db (axum state) and mutates only via existing CLI repository methods (`set_idea_statuses`, `mark_alerts_read`, `clear_alerts`) — no duplicated write logic. Running `serve` concurrently with writing CLI commands is **unsupported**; concurrent readers fine (WAL).
+
+**stdout purity:** `serve` is long-running and never emits the JSON envelope (LLD §4.2 applies to one-shot commands); stdout stays empty (smoke-verified 0 bytes), listening line → stderr. `--json` global flag is ignored for `serve` (documented in `cli.rs` help).
+
+**Loopback enforcement:** bind host checked at startup — `127.0.0.1`/`localhost`/`::1` only; any other host → usage error, exit 2. Port precedence: `--port` flag > `TUBEFORGE_SERVE_PORT` env > 8080.
 
 ---
 
@@ -477,7 +514,7 @@ backup:
 ## 10. Concurrency & Async Model
 
 - **tokio** runtime (network). Storage calls are **synchronous** (Turso crate): issue from `spawn_blocking` or between await points; never hold a DB guard across an await. (Turso API is async — use its async API directly; sequential awaits, single writer.)
-- Strictly **one writer** at a time: CLI process model makes this trivially true; no daemon.
+- Strictly **one writer** at a time: CLI process model makes this trivially true; no daemon. `serve` (dashboard) holds one shared read/write connection — see §4.5 single-writer caveat (never run it concurrently with writing CLI commands; WAL readers fine).
 - Retries (network only): 3× exponential backoff with jitter; idempotent by design (PK upserts).
 - Cancellation: Ctrl-C → abort between phases; transaction rollback protects; next run re-enters safely (ingest_log + PKs).
 
@@ -500,13 +537,14 @@ backup:
 | `TUBEFORGE_QUOTA_WARN_AT` | `90` (percent) | Warn threshold |
 | `TUBEFORGE_CHROMIUM_DIR` | `<data>/chromium` | Headless Chromium install root (chromiumoxide_fetcher-pinned, auto-downloaded) |
 | `TUBEFORGE_FILMOT_KEY` | *(empty)* | Opt-in Filmot API key for `filmot get`; empty = command disabled (CONFIG error) |
+| `TUBEFORGE_SERVE_PORT` | `8080` | `serve` listen port (flag `--port` overrides; must be a number — else CONFIG error) |
 | `LOG_LEVEL` | `info` | tracing filter |
 
 ---
 
 ## 12. Testing Strategy
 
-**Current: 136/136 tests passing + 2 ignored (Aug 4, 2026)** — the 2 ignored: the opt-in performance gate + the Chromium-gated render. Suites: `tests/agent_contract.rs` (11 binary-level `--json` contract tests) and `tests/perf_gate.rs` (2 sanity tests + 1 ignored gate).
+**Current: 165/165 tests passing + 2 ignored (Aug 4, 2026)** — the 2 ignored: the opt-in performance gate + the Chromium-gated render. Suites: `tests/agent_contract.rs` (11 binary-level `--json` contract tests), `tests/serve.rs` (12 dashboard HTTP tests), and `tests/perf_gate.rs` (2 sanity tests + 1 ignored gate).
 
 | Layer | Tests |
 |---|---|
@@ -518,6 +556,10 @@ backup:
 | Property | dedupe fuzz (random URL sets), ingest idempotency (run twice → same state) |
 | Performance smoke | 5k videos ingest + reindex + top-k ideas < 30s on M4 (gate) — **✅ PASSED (Aug 4, 2026, M4, release profile)**: ingest 20.22s / reindex 0.20s / ideas 0.06s / total 20.49s vs 30s budget (per-phase budgets ingest<25 reindex<10 ideas<5). Run: `cargo test --release --test perf_gate -- --ignored --nocapture`. Scaling finding: post-ingest scoring is the dominant cost, ~4ms/video at 5k corpus (`tests/perf_gate.rs`) |
 | Render (ignored, env-gated) | `thumbnail render` end-to-end vs headless Chromium — 1 ignored test (requires pinned Chromium download) |
+| Template autoescaping (askama) | dashboard templates render without injecting raw HTML; user-controlled values (titles, alerts, ideas) escaped by askama 0.14 at compile time |
+| SVG escaping | chart rendering (`serve/svg.rs`) — values/axis labels escaped; no HTML injection through chart input |
+| CSRF policy (`tests/serve.rs`) | bad Origin → 403; absent Origin/Referer → allowed (curl/agents); mismatched Referer → 403 |
+| Serve integration (`tests/serve.rs`) | ephemeral-port server + real Db: all pages respond 200, `/healthz` plain "ok", unknown route 404, `static/htmx.min.js` served, **DB-verified mutations** (idea status POST flips row, alerts read/clear POSTs mutate rows), home embeds counts + charts, score detail fragment lists all 17 components |
 
 ---
 

@@ -1,0 +1,22 @@
+<div id="alerts-list">
+  <table>
+    <thead>
+      <tr><th>Kind</th><th>Severity</th><th>Channel</th><th>Message</th><th>Created</th><th>State</th></tr>
+    </thead>
+    <tbody>
+    {% for alert in alerts %}
+      <tr>
+        <td><span class="badge {{ alert.kind }}">{{ alert.kind }}</span></td>
+        <td class="{{ alert.severity }}">{{ alert.severity }}</td>
+        <td class="muted">{{ alert.channel_id }}</td>
+        <td>{{ alert.message }}</td>
+        <td class="muted">{{ alert.created_at }}</td>
+        <td>{% if alert.read %}<span class="badge draft">read</span>{% else %}<span class="badge unread">unread</span>{% endif %}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6" class="muted">No alerts.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted">Evaluated by <code>tubeforge alerts</code> — this dashboard only lists and clears.</p>
+</div>
