@@ -1,0 +1,44 @@
+[advisories]
+yanked = "deny"
+
+[bans]
+multiple-versions = "deny"
+# Known transitive duplicates, unavoidable without source changes:
+# turso_core pulls rand 0.8 / syn 2 / rustix 0.38 / windows-sys 0.59 via
+# antithesis_sdk, shuttle, loom, bindgen; chromiumoxide pulls rand 0.9 / which 8.
+skip = [
+  { name = "rand", version = "=0.8.7" },
+  { name = "rand", version = "=0.10.2" },
+  { name = "rand_chacha", version = "=0.3.1" },
+  { name = "rand_core", version = "=0.6.4" },
+  { name = "rand_core", version = "=0.10.1" },
+  { name = "rustc-hash", version = "=1.1.0" },
+  { name = "rustix", version = "=0.38.44" },
+  { name = "shlex", version = "=1.3.0" },
+  { name = "syn", version = "=2.0.119" },
+  { name = "which", version = "=4.4.2" },
+  { name = "windows-sys", version = "=0.59.0" },
+  { name = "allocator-api2", version = "=0.2.21" },
+  { name = "cpufeatures", version = "=0.2.17" },
+  { name = "getrandom", version = "=0.2.17" },
+  { name = "getrandom", version = "=0.3.4" },
+  { name = "hashbrown", version = "=0.16.1" },
+  { name = "itertools", version = "=0.12.1" },
+  { name = "linux-raw-sys", version = "=0.4.15" },
+  { name = "r-efi", version = "=5.3.0" },
+]
+
+[licenses]
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+  "CC0-1.0",
+  # option-ext (via dirs-sys -> chromiumoxide_fetcher)
+  "MPL-2.0",
+  # webpki-root-certs (rustls trust-anchor chain)
+  "CDLA-Permissive-2.0",
+]

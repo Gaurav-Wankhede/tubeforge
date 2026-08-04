@@ -3,7 +3,7 @@
 **Project:** TubeForge — local-first YouTube SEO/GEO growth engine
 **Document version:** 1.2 | **Date:** August 4, 2026
 **Status:** Approved — Phases 0–3 delivered; basis for Phase 4
-**Companion documents:** `PRD.md` (v3.12), `LLD.md`
+**Companion documents:** `PRD.md` (v3.13), `LLD.md`
 
 ---
 
