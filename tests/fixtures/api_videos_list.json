@@ -1,0 +1,81 @@
+{
+  "kind": "youtube#videoListResponse",
+  "etag": "fixture-etag-1",
+  "items": [
+    {
+      "kind": "youtube#video",
+      "etag": "fixture-item-1",
+      "id": "aaa111bbb22",
+      "snippet": {
+        "publishedAt": "2026-07-15T10:00:00Z",
+        "channelId": "UCa1b2c3d4e5f6g7h8i9j0kLM",
+        "title": "Rust Database Engineering Guide (API)",
+        "description": "Rich API description with details about storage engines and B-trees.",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/aaa111bbb22/default.jpg",
+            "width": 120,
+            "height": 90
+          }
+        },
+        "channelTitle": "Fixture Channel",
+        "categoryId": "28",
+        "liveBroadcastContent": "none",
+        "defaultAudioLanguage": "en",
+        "tags": ["rust", "database", "storage", "tutorial"]
+      },
+      "contentDetails": {
+        "duration": "PT12M34S",
+        "dimension": "2d",
+        "definition": "hd",
+        "caption": "false",
+        "licensedContent": true,
+        "contentRating": {},
+        "projection": "rectangular"
+      },
+      "statistics": {
+        "viewCount": "123456",
+        "likeCount": "7890",
+        "favoriteCount": "0",
+        "commentCount": "123"
+      }
+    },
+    {
+      "kind": "youtube#video",
+      "etag": "fixture-item-2",
+      "id": "ccc222ddd33",
+      "snippet": {
+        "publishedAt": "2026-07-01T08:00:00Z",
+        "channelId": "UCa1b2c3d4e5f6g7h8i9j0kLM",
+        "title": "Async Rust Patterns (API)",
+        "description": "API description for the async patterns video.",
+        "thumbnails": {
+          "default": {
+            "url": "https://i.ytimg.com/vi/ccc222ddd33/default.jpg",
+            "width": 120,
+            "height": 90
+          }
+        },
+        "channelTitle": "Fixture Channel",
+        "categoryId": "28",
+        "liveBroadcastContent": "none",
+        "tags": ["async", "rust", "tokio", "patterns"]
+      },
+      "contentDetails": {
+        "duration": "PT8M5S",
+        "dimension": "2d",
+        "definition": "hd",
+        "caption": "false",
+        "licensedContent": true,
+        "contentRating": {},
+        "projection": "rectangular"
+      },
+      "statistics": {
+        "viewCount": "98760",
+        "likeCount": "5432",
+        "favoriteCount": "0",
+        "commentCount": "98"
+      }
+    }
+  ]
+}

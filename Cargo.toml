@@ -1,0 +1,29 @@
+[package]
+name = "tubeforge"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+chrono = { version = "0.4.45", features = ["serde"] }
+chrono-tz = "0.10.4"
+clap = { version = "4.6.5", features = ["derive"] }
+dotenvy = "0.15.7"
+quick-xml = "0.41.0"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tantivy = "=0.26.1"
+thiserror = "2.0.19"
+tokio = { version = "=1.53.1", features = ["rt-multi-thread", "macros"] }
+tracing = "0.1.44"
+tracing-subscriber = "0.3.23"
+turso = "=0.7.2"
+url = "2.5.8"
+
+[dev-dependencies]
+rusqlite = { version = "=0.40.1", features = ["bundled"] }
+tempfile = "3.27.0"
+wiremock = "0.6.5"
+
+[profile.release]
+lto = "thin"

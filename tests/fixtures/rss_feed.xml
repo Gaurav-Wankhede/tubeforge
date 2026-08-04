@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" xmlns:media="http://search.yahoo.com/mrss/" xmlns="http://www.w3.org/2005/Atom">
+  <link rel="self" href="https://www.youtube.com/feeds/videos.xml?channel_id=UCa1b2c3d4e5f6g7h8i9j0kLM"/>
+  <id>yt:channel:UCa1b2c3d4e5f6g7h8i9j0kLM</id>
+  <yt:channelId>UCa1b2c3d4e5f6g7h8i9j0kLM</yt:channelId>
+  <title>Videos</title>
+  <link rel="alternate" href="https://www.youtube.com/channel/UCa1b2c3d4e5f6g7h8i9j0kLM"/>
+  <author>
+    <name>Fixture Channel</name>
+    <uri>https://www.youtube.com/channel/UCa1b2c3d4e5f6g7h8i9j0kLM</uri>
+  </author>
+  <published>2026-07-01T12:00:00+00:00</published>
+  <entry>
+    <id>yt:video:aaa111bbb22</id>
+    <yt:videoId>aaa111bbb22</yt:videoId>
+    <yt:channelId>UCa1b2c3d4e5f6g7h8i9j0kLM</yt:channelId>
+    <title>Rust Database Engineering Guide</title>
+    <link rel="alternate" href="https://www.youtube.com/watch?v=aaa111bbb22"/>
+    <author>
+      <name>Fixture Channel</name>
+      <uri>https://www.youtube.com/channel/UCa1b2c3d4e5f6g7h8i9j0kLM</uri>
+    </author>
+    <published>2026-07-15T10:00:00+00:00</published>
+    <updated>2026-07-15T10:05:00+00:00</updated>
+    <media:group>
+      <media:title>Rust Database Engineering Guide</media:title>
+      <media:content url="https://www.youtube.com/watch?v=aaa111bbb22" type="application/x-shockwave-flash" width="640" height="390"/>
+      <media:thumbnail url="https://i.ytimg.com/vi/aaa111bbb22/mqdefault.jpg" width="320" height="180"/>
+      <media:description>Learn how to build a database in Rust &amp; understand the storage engine internals.</media:description>
+      <media:community>
+        <media:starRating count="12" average="4.75" min="1" max="5"/>
+        <media:statistics views="12345"/>
+      </media:community>
+    </media:group>
+  </entry>
+  <entry>
+    <id>yt:video:ccc222ddd33</id>
+    <yt:videoId>ccc222ddd33</yt:videoId>
+    <yt:channelId>UCa1b2c3d4e5f6g7h8i9j0kLM</yt:channelId>
+    <title>Async Rust Patterns</title>
+    <link rel="alternate" href="https://www.youtube.com/watch?v=ccc222ddd33"/>
+    <author>
+      <name>Fixture Channel</name>
+      <uri>https://www.youtube.com/channel/UCa1b2c3d4e5f6g7h8i9j0kLM</uri>
+    </author>
+    <published>2026-07-01T08:00:00+00:00</published>
+    <updated>2026-07-01T08:02:00+00:00</updated>
+    <media:group>
+      <media:title>Async Rust Patterns</media:title>
+      <media:content url="https://www.youtube.com/watch?v=ccc222ddd33" type="application/x-shockwave-flash" width="640" height="390"/>
+      <media:thumbnail url="https://i.ytimg.com/vi/ccc222ddd33/mqdefault.jpg" width="320" height="180"/>
+      <media:description>A practical walkthrough of async/await patterns that scale.</media:description>
+      <media:community>
+        <media:starRating count="5" average="5.0" min="1" max="5"/>
+        <media:statistics views="9876"/>
+      </media:community>
+    </media:group>
+  </entry>
+  <entry>
+    <id>yt:video:eee333fff44</id>
+    <yt:videoId>eee333fff44</yt:videoId>
+    <yt:channelId>UCa1b2c3d4e5f6g7h8i9j0kLM</yt:channelId>
+    <title>Zero-Dep HTTP in 20 Minutes</title>
+    <link rel="alternate" href="https://www.youtube.com/watch?v=eee333fff44"/>
+    <author>
+      <name>Fixture Channel</name>
+      <uri>https://www.youtube.com/channel/UCa1b2c3d4e5f6g7h8i9j0kLM</uri>
+    </author>
+    <published>2026-06-20T14:30:00+00:00</published>
+    <updated>2026-06-21T09:00:00+00:00</updated>
+    <media:group>
+      <media:title>Zero-Dep HTTP in 20 Minutes</media:title>
+      <media:content url="https://www.youtube.com/watch?v=eee333fff44" type="application/x-shockwave-flash" width="640" height="390"/>
+      <media:thumbnail url="https://i.ytimg.com/vi/eee333fff44/mqdefault.jpg" width="320" height="180"/>
+      <media:description>Write an HTTP server with no dependencies at all.</media:description>
+      <media:community>
+        <media:starRating count="3" average="4.33" min="1" max="5"/>
+        <media:statistics views="5432"/>
+      </media:community>
+    </media:group>
+  </entry>
+</feed>

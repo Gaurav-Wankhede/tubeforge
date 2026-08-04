@@ -1,0 +1,15 @@
+{
+  "type": "video",
+  "version": "1.0",
+  "title": "Example Video Title",
+  "author_name": "Example Channel",
+  "author_url": "https://www.youtube.com/@examplechannel",
+  "provider_name": "YouTube",
+  "provider_url": "https://www.youtube.com/",
+  "thumbnail_url": "https://i.ytimg.com/vi/aaa111bbb22/hqdefault.jpg",
+  "thumbnail_width": 480,
+  "thumbnail_height": 360,
+  "html": "<iframe width=\"480\" height=\"270\" src=\"https://www.youtube.com/embed/aaa111bbb22?feature=oembed\" frameborder=\"0\" allow=\"accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share\" allowfullscreen title=\"Example Video Title\"></iframe>",
+  "width": 480,
+  "height": 270
+}
