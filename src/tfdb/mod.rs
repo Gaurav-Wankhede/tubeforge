@@ -27,6 +27,7 @@ pub mod graph;
 pub mod hnsw;
 pub mod schema;
 pub mod store;
+pub mod tfdb_schema;
 
 pub use schema::{Col, ColType, TableSchema};
 pub use store::{Engine, EngineOptions, Tx, Value};
