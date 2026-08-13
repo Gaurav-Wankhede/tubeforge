@@ -32,15 +32,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use askama::Template;
-use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, StatusCode};
-use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::response::{Html, IntoResponse, Response};
-use axum::routing::{get, post};
-use axum::Router;
 use futures::Stream;
 use serde_json::Value;
-use tower_http::services::{ServeDir, ServeFile};
 
 use crate::analytics::keywords::trend_rows;
 use crate::analytics::reports;
@@ -48,8 +41,14 @@ use crate::config::Config;
 use crate::error::{storage_err, TubeforgeError};
 use crate::fetch::ytdlp::YtdlpClient;
 use crate::storage::db::{Db, IdeaRow};
+use http::{HeaderMap, StatusCode};
 use svg::sparkline;
 use templates::*;
+use web::sse::{Event, KeepAlive, Sse};
+use web::{
+    get, post, Headers, Html, IntoResponse, Path, Query, ReqUri, Response,
+    Router, ServeState, State,
+};
 
 /// The 15 SEO component keys in canonical display order (LLD §7.2 +
 /// Phase 6.6 vidIQ additions, matches `scoring::seo::SeoComponents::values`).
@@ -191,22 +190,22 @@ pub async fn kg_status(st: &AppState) -> KgStatus {
     }
 }
 
-/// Build the dashboard router. Handlers take `&AppState` so tests can drive
-/// them directly and the router stays a pure function of state.
+/// Build the dashboard router plus the shared `ServeState` that carries the
+/// `AppState` into handlers.
 ///
 /// Route ownership:
 /// - `/api/*`, `/events`, `/healthz`, `/static/*` are shared (both UIs use them).
 /// - When `frontend/dist` exists, the React SPA owns the root page routes and
 ///   the legacy HTMX pages move under `/legacy/*`.
 /// - Without a SPA build, the HTMX pages keep the root routes (original behavior).
-pub fn app(state: AppState) -> Router {
+pub fn app(state: AppState) -> (Router, Arc<ServeState>) {
     let spa_dist = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("frontend/dist");
     let spa_enabled = spa_dist.exists();
 
     let mut router = Router::new()
         .merge(api::api_routes())
         .route("/events", get(events))
-        .route("/ws", get(rpc::ws_handler))
+        .ws(rpc::ws_handler)
         .route("/healthz", get(healthz))
         .route("/static/htmx.min.js", get(htmx_js))
         .route("/static/sse.js", get(sse_js));
@@ -226,11 +225,7 @@ pub fn app(state: AppState) -> Router {
             .route("/legacy/health", get(health_page))
             // SPA owns every unmatched path: client-side routing serves
             // index.html, real files under dist/ are served directly.
-            .fallback_service(
-                ServeDir::new(&spa_dist)
-                    .append_index_html_on_directories(true)
-                    .fallback(ServeFile::new(spa_dist.join("index.html"))),
-            );
+            .spa_fallback(spa_dist.clone(), spa_dist.join("index.html"));
     } else {
         router = router
             .route("/", get(home))
@@ -247,7 +242,7 @@ pub fn app(state: AppState) -> Router {
             .fallback(not_found);
     }
 
-    router.with_state(state)
+    (router, ServeState::new(state))
 }
 
 /// `tubeforge serve`: open one Db, bind the listener, print the listening
@@ -287,18 +282,13 @@ pub async fn run(cfg: &Config, host: &str, port: u16) -> Result<(), TubeforgeErr
         own_channel: cfg.own_channel.clone(),
         kg: Arc::new(std::sync::Mutex::new(None)),
     };
-    axum::serve(listener, app(state))
-        .with_graceful_shutdown(shutdown_signal())
+    let (router, serve_state) = app(state);
+    web::serve(listener, Arc::new(router), serve_state)
         .await
         .map_err(|e| storage_err("SERVE", e))
 }
 
 /// Ctrl-C → clean shutdown (graceful: in-flight requests drain first).
-async fn shutdown_signal() {
-    let _ = tokio::signal::ctrl_c().await;
-    tracing::info!("serve: shutdown signal received");
-}
-
 fn is_loopback_host(host: &str) -> bool {
     if host.eq_ignore_ascii_case("localhost") {
         return true;
@@ -485,7 +475,7 @@ async fn ideas_page(State(st): State<AppState>) -> Response {
 async fn ideas_status(
     State(st): State<AppState>,
     Path((id, status)): Path<(i64, String)>,
-    headers: HeaderMap,
+    Headers(headers): Headers,
 ) -> Response {
     if let Err(resp) = csrf_guard(&headers, &st) {
         return resp.into_response();
@@ -512,7 +502,7 @@ async fn ideas_status(
                 Err(e) => internal(e),
             }
         }
-        None => (StatusCode::NOT_FOUND, Html("idea not found")).into_response(),
+        None => (StatusCode::NOT_FOUND, Html("idea not found".to_string())).into_response(),
     }
 }
 
@@ -599,7 +589,7 @@ async fn alerts_page(State(st): State<AppState>) -> Response {
 /// POST /alerts/read: mark every alert read (CLI `--mark-read` path), then
 /// return the fresh panel fragment (buttons AND list — so the buttons'
 /// disabled state can't go stale).
-async fn alerts_read(State(st): State<AppState>, headers: HeaderMap) -> Response {
+async fn alerts_read(State(st): State<AppState>, Headers(headers): Headers) -> Response {
     if let Err(resp) = csrf_guard(&headers, &st) {
         return resp.into_response();
     }
@@ -611,7 +601,7 @@ async fn alerts_read(State(st): State<AppState>, headers: HeaderMap) -> Response
 
 /// POST /alerts/clear: delete all alerts (CLI `alerts clear` path), then
 /// return the (now empty) panel fragment.
-async fn alerts_clear(State(st): State<AppState>, headers: HeaderMap) -> Response {
+async fn alerts_clear(State(st): State<AppState>, Headers(headers): Headers) -> Response {
     if let Err(resp) = csrf_guard(&headers, &st) {
         return resp.into_response();
     }
@@ -751,7 +741,7 @@ async fn healthz() -> Response {
 async fn htmx_js() -> Response {
     (
         StatusCode::OK,
-        [(axum::http::header::CONTENT_TYPE, "application/javascript")],
+        [(http::header::CONTENT_TYPE.as_str(), "application/javascript")],
         include_str!("../static/htmx.min.js"),
     )
         .into_response()
@@ -764,14 +754,14 @@ async fn htmx_js() -> Response {
 async fn sse_js() -> Response {
     (
         StatusCode::OK,
-        [(axum::http::header::CONTENT_TYPE, "application/javascript")],
+        [(http::header::CONTENT_TYPE.as_str(), "application/javascript")],
         include_str!("../static/sse.js"),
     )
         .into_response()
 }
 
-async fn not_found(req: axum::extract::Request) -> Response {
-    let path = req.uri().path().to_string();
+async fn not_found(ReqUri(uri): ReqUri) -> Response {
+    let path = uri.path().to_string();
     let body = match render(NotFoundTemplate { path: &path }) {
         Ok(s) => s,
         Err(e) => return internal(e),
@@ -802,7 +792,7 @@ fn render_base(title: &str, active: &str, body: &str) -> Result<String, Tubeforg
     })
 }
 
-fn html(s: String) -> Html<String> {
+fn html(s: String) -> Html {
     Html(s)
 }
 

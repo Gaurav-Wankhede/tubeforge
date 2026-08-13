@@ -104,6 +104,15 @@ where
     }
 }
 
+impl<S> super::IntoResponse for Sse<S>
+where
+    S: Stream<Item = Result<Event, Infallible>> + Send + 'static,
+{
+    fn into_response(self) -> super::Response {
+        self.into_response()
+    }
+}
+
 /// Frame one event into the wire format.
 fn frame_event(e: &Event) -> String {
     let mut out = String::new();
@@ -138,7 +147,8 @@ impl HttpBody for SseBody {
     }
 
     fn size_hint(&self) -> SizeHint {
-        SizeHint::with_exact(0)
+        // Unknown length → chunked transfer, not a fixed content-length.
+        SizeHint::default()
     }
 }
 
@@ -156,12 +166,7 @@ where
     tokio::spawn(async move {
         use futures::StreamExt;
         let mut stream = Box::pin(stream);
-        let mut first = true;
         loop {
-            if !first {
-                tokio::time::sleep(interval).await;
-            }
-            first = false;
             let next = tokio::select! {
                 n = stream.next() => n,
                 _ = tokio::time::sleep(interval) => None,

@@ -11,7 +11,7 @@ pub use tokio_tungstenite::tungstenite::Message;
 use std::sync::Arc;
 
 use futures::{SinkExt, StreamExt};
-use http::{Request, Response as HttpResponse, StatusCode};
+use http::{Response as HttpResponse, StatusCode};
 use hyper::body::Incoming;
 use tokio::sync::Mutex;
 
@@ -36,7 +36,7 @@ pub fn split(
 /// headers. If the request is not a valid WebSocket upgrade, returns `None`
 /// so the caller can fall back to a 400.
 pub fn upgrade<F>(
-    req: &mut Request<Incoming>,
+    req: &mut http::Request<Incoming>,
     on_upgraded: F,
 ) -> Option<HttpResponse<super::Body>>
 where

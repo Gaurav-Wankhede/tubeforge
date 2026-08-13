@@ -15,7 +15,7 @@
 //! - Neither present → allowed: non-browser local clients (curl, scripts,
 //!   AI agents) send no Origin and cannot be tricked by browser CSRF.
 
-use axum::http::HeaderMap;
+use http::HeaderMap;
 
 /// True when the request passes the origin guard against the bound
 /// `host:port` string (e.g. `127.0.0.1:8080`).
@@ -33,11 +33,11 @@ pub fn origin_allowed(headers: &HeaderMap, bind: &str) -> bool {
 /// `Ok(host[:port])` when a valid http(s) origin was presented, `Err(())`
 /// when a header was present but unparseable, `None` when absent.
 fn origin_from(headers: &HeaderMap) -> Option<Result<String, ()>> {
-    if let Some(v) = headers.get(axum::http::header::ORIGIN) {
+    if let Some(v) = headers.get(http::header::ORIGIN) {
         return Some(origin_of_url(v.to_str().ok()?));
     }
     headers
-        .get(axum::http::header::REFERER)
+        .get(http::header::REFERER)
         .map(|v| match v.to_str() {
             Ok(s) => origin_of_url(s),
             Err(_) => Err(()),
@@ -88,12 +88,11 @@ fn normalize_host(host: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::http::HeaderMap;
 
     fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
         let mut h = HeaderMap::new();
         for (k, v) in pairs {
-            let key = axum::http::HeaderName::from_bytes(k.as_bytes()).expect("header name");
+            let key = http::HeaderName::from_bytes(k.as_bytes()).expect("header name");
             h.insert(key, v.parse().unwrap());
         }
         h

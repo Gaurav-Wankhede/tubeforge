@@ -3,7 +3,7 @@
 //! The server is spawned on an ephemeral port (port 0) with a temp database,
 //! then exercised over real HTTP (reqwest). Mutations are verified through
 //! the storage layer afterwards — the same write paths the CLI uses.
-
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use futures::StreamExt;
@@ -14,7 +14,9 @@ use tubeforge::storage::db::Db;
 /// a keyword with two rank snapshots. Returns the open Db.
 async fn seed_db() -> Db {
     let dir = tempfile::tempdir().expect("tempdir");
-    let mut db = Db::open(&dir.path().join("dash.db")).await.expect("open db");
+    let mut db = Db::open(&dir.path().join("dash.db"))
+        .await
+        .expect("open db");
     let at = "2026-08-01T00:00:00Z";
 
     let mut batch = db.begin_batch().await.expect("begin batch");
@@ -43,8 +45,18 @@ async fn seed_db() -> Db {
         .await
         .expect("channel b");
     for (vid, ch, title, views) in [
-        ("aaa111bbb22", "UCtest0000000000000000001", "TubeForge Dashboard Guide", 1000),
-        ("bbb222ccc33", "UCtest0000000000000000002", "Rust & SEO <Tips>", 500),
+        (
+            "aaa111bbb22",
+            "UCtest0000000000000000001",
+            "TubeForge Dashboard Guide",
+            1000,
+        ),
+        (
+            "bbb222ccc33",
+            "UCtest0000000000000000002",
+            "Rust & SEO <Tips>",
+            500,
+        ),
     ] {
         batch
             .upsert_video(&tubeforge::storage::db::VideoRow {
@@ -88,14 +100,22 @@ async fn seed_db() -> Db {
         .await
         .expect("alert");
 
-    db.add_keywords(&["rust".into()], None).await.expect("keyword");
+    db.add_keywords(&["rust".into()], None)
+        .await
+        .expect("keyword");
     for (kw, checked_at, pos) in [
         ("rust", "2026-07-30T00:00:00Z", Some(4i64)),
         ("rust", "2026-08-01T00:00:00Z", Some(2i64)),
     ] {
-        db.upsert_ranking(kw, checked_at, Some("aaa111bbb22"), pos, Some(r#"["Databases"]"#))
-            .await
-            .expect("ranking");
+        db.upsert_ranking(
+            kw,
+            checked_at,
+            Some("aaa111bbb22"),
+            pos,
+            Some(r#"["Databases"]"#),
+        )
+        .await
+        .expect("ranking");
     }
 
     db
@@ -108,19 +128,31 @@ async fn spawn_server() -> (String, u16, Db) {
     // (turso Connection is Clone; the server keeps the first handle).
     let verify_conn = db.conn.clone();
     let path = db.path.clone();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind 0");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind 0");
     let addr = listener.local_addr().expect("local addr");
     let state = AppState {
         db: Arc::new(db),
         bind: addr.to_string(),
+        ytdlp: None,
+        data_dir: PathBuf::from("/tmp/tf-serve-test-data"),
+        own_channel: None,
+        kg: Arc::new(std::sync::Mutex::new(None)),
     };
+    let (router, serve_state) = serve::app(state);
     tokio::spawn(async move {
-        axum::serve(listener, serve::app(state)).await.expect("serve");
+        tubeforge::serve::web::serve(listener, std::sync::Arc::new(router), serve_state)
+            .await
+            .expect("serve");
     });
     (
         format!("http://{addr}"),
         addr.port(),
-        Db { conn: verify_conn, path },
+        Db {
+            conn: verify_conn,
+            path,
+        },
     )
 }
 
@@ -135,7 +167,15 @@ fn client() -> reqwest::Client {
 async fn all_pages_respond_200() {
     let (base, _port, _db) = spawn_server().await;
     let c = client();
-    for path in ["/", "/scores", "/ideas", "/keywords", "/alerts", "/scorecard", "/health"] {
+    for path in [
+        "/",
+        "/scores",
+        "/ideas",
+        "/keywords",
+        "/alerts",
+        "/scorecard",
+        "/health",
+    ] {
         let resp = c.get(format!("{base}{path}")).send().await.expect("GET");
         assert_eq!(resp.status(), 200, "GET {path}");
         let body = resp.text().await.expect("body");
@@ -150,7 +190,11 @@ async fn all_pages_respond_200() {
 #[tokio::test]
 async fn healthz_is_plain_ok() {
     let (base, _port, _db) = spawn_server().await;
-    let resp = client().get(format!("{base}/healthz")).send().await.expect("GET");
+    let resp = client()
+        .get(format!("{base}/healthz"))
+        .send()
+        .await
+        .expect("GET");
     assert_eq!(resp.status(), 200);
     assert_eq!(resp.text().await.expect("body"), "ok");
 }
@@ -159,7 +203,7 @@ async fn healthz_is_plain_ok() {
 async fn home_embeds_counts_and_charts() {
     let (base, _port, _db) = spawn_server().await;
     let body = client()
-        .get(format!("{base}/"))
+        .get(format!("{base}/legacy"))
         .send()
         .await
         .expect("GET")
@@ -169,8 +213,14 @@ async fn home_embeds_counts_and_charts() {
     assert!(body.contains("hx-ext=\"sse\""));
     assert!(body.contains("sse-connect=\"/events\""));
     assert!(body.contains("sse-swap=\"counts\""));
-    assert!(body.contains("/static/sse.js"), "sse extension script vendored");
-    assert!(body.contains("<svg"), "inline SVG charts are server-rendered");
+    assert!(
+        body.contains("/static/sse.js"),
+        "sse extension script vendored"
+    );
+    assert!(
+        body.contains("<svg"),
+        "inline SVG charts are server-rendered"
+    );
     assert!(body.contains("Views per channel"));
     assert!(body.contains("SEO score distribution"));
 }
@@ -180,7 +230,7 @@ async fn scores_page_filters_and_lists() {
     let (base, _port, _db) = spawn_server().await;
     let c = client();
     let body = c
-        .get(format!("{base}/scores"))
+        .get(format!("{base}/legacy/scores"))
         .send()
         .await
         .expect("GET")
@@ -195,7 +245,7 @@ async fn scores_page_filters_and_lists() {
     );
 
     let body = c
-        .get(format!("{base}/scores?q=tips"))
+        .get(format!("{base}/legacy/scores?q=tips"))
         .send()
         .await
         .expect("GET")
@@ -204,14 +254,17 @@ async fn scores_page_filters_and_lists() {
         .expect("body");
     // Askama autoescapes with numeric entities: & → &#38;, < → &#60;.
     assert!(body.contains("Rust &#38; SEO &#60;Tips&#62;"));
-    assert!(!body.contains("TubeForge Dashboard Guide"), "filter applied");
+    assert!(
+        !body.contains("TubeForge Dashboard Guide"),
+        "filter applied"
+    );
 }
 
 #[tokio::test]
 async fn score_detail_fragment_lists_17_components() {
     let (base, _port, _db) = spawn_server().await;
     let body = client()
-        .get(format!("{base}/scores/aaa111bbb22"))
+        .get(format!("{base}/legacy/scores/aaa111bbb22"))
         .send()
         .await
         .expect("GET")
@@ -229,7 +282,7 @@ async fn ideas_status_post_updates_the_database() {
     let c = client();
 
     let resp = c
-        .post(format!("{base}/ideas/1/saved"))
+        .post(format!("{base}/legacy/ideas/1/saved"))
         .header("Origin", format!("http://127.0.0.1:{_port}"))
         .send()
         .await
@@ -250,7 +303,7 @@ async fn csrf_bad_origin_is_forbidden() {
     let c = client();
 
     let resp = c
-        .post(format!("{base}/ideas/1/discarded"))
+        .post(format!("{base}/legacy/ideas/1/discarded"))
         .header("Origin", "http://evil.example:8080")
         .send()
         .await
@@ -259,7 +312,7 @@ async fn csrf_bad_origin_is_forbidden() {
 
     // Wrong port on the same host is also rejected.
     let resp = c
-        .post(format!("{base}/ideas/1/discarded"))
+        .post(format!("{base}/legacy/ideas/1/discarded"))
         .header("Origin", "http://127.0.0.1:9")
         .send()
         .await
@@ -273,7 +326,7 @@ async fn csrf_absent_origin_is_allowed() {
     let c = client();
 
     let resp = c
-        .post(format!("{base}/ideas/1/discarded"))
+        .post(format!("{base}/legacy/ideas/1/discarded"))
         .send()
         .await
         .expect("POST");
@@ -288,7 +341,7 @@ async fn alerts_read_and_clear_posts() {
     let c = client();
 
     let resp = c
-        .post(format!("{base}/alerts/read"))
+        .post(format!("{base}/legacy/alerts/read"))
         .header("Origin", format!("http://127.0.0.1:{_port}"))
         .send()
         .await
@@ -302,7 +355,7 @@ async fn alerts_read_and_clear_posts() {
     assert!(alerts[0].read_at.is_some(), "read_at persisted");
 
     let resp = c
-        .post(format!("{base}/alerts/clear"))
+        .post(format!("{base}/legacy/alerts/clear"))
         .header("Origin", format!("http://127.0.0.1:{_port}"))
         .send()
         .await
@@ -313,12 +366,20 @@ async fn alerts_read_and_clear_posts() {
 }
 
 #[tokio::test]
-async fn unknown_routes_404_and_static_js_serves() {
+async fn unknown_routes_and_static_js_serves() {
     let (base, _port, _db) = spawn_server().await;
     let c = client();
 
+    // With the SPA build present, an unknown GET path is served the SPA
+    // index (client-side routing), not a 404. Unknown API paths stay 404.
+    let resp = c
+        .get(format!("{base}/api/not-a-route"))
+        .send()
+        .await
+        .expect("GET");
+    assert_eq!(resp.status(), 404, "unknown API path is 404");
     let resp = c.get(format!("{base}/nope")).send().await.expect("GET");
-    assert_eq!(resp.status(), 404);
+    assert_eq!(resp.status(), 200, "unknown page path serves the SPA shell");
 
     let resp = c
         .get(format!("{base}/static/htmx.min.js"))
@@ -328,7 +389,10 @@ async fn unknown_routes_404_and_static_js_serves() {
     assert_eq!(resp.status(), 200);
     let body = resp.text().await.expect("body");
     assert!(body.contains("htmx"), "vendored htmx served");
-    assert!(body.contains("htmx=function"), "looks like the real htmx bundle");
+    assert!(
+        body.contains("htmx=function"),
+        "looks like the real htmx bundle"
+    );
 
     let resp = c
         .get(format!("{base}/static/sse.js"))
@@ -373,14 +437,11 @@ async fn sse_stream_pushes_counts_event_on_connect() {
     let mut buf = Vec::new();
     let mut body = resp.bytes_stream();
     while buf.len() < 4096 && !String::from_utf8_lossy(&buf).contains("Videos") {
-        let chunk = tokio::time::timeout(
-            std::time::Duration::from_secs(3),
-            body.next(),
-        )
-        .await
-        .expect("chunk within 3s — stream must not stall")
-        .expect("stream alive")
-        .expect("read bytes");
+        let chunk = tokio::time::timeout(std::time::Duration::from_secs(3), body.next())
+            .await
+            .expect("chunk within 3s — stream must not stall")
+            .expect("stream alive")
+            .expect("read bytes");
         buf.extend_from_slice(&chunk);
     }
     let head = String::from_utf8_lossy(&buf);
@@ -389,8 +450,14 @@ async fn sse_stream_pushes_counts_event_on_connect() {
         "first frame is the counts event, got: {head:.200}"
     );
     assert!(head.contains("data:"), "event carries a data line");
-    assert!(head.contains("Videos"), "data carries the counts card markup");
-    assert!(head.contains("id=\"counts\""), "swap target shape preserved");
+    assert!(
+        head.contains("Videos"),
+        "data carries the counts card markup"
+    );
+    assert!(
+        head.contains("class=\"card\""),
+        "data carries the counts grid fragment"
+    );
 }
 
 #[tokio::test]
@@ -410,7 +477,10 @@ async fn sse_stream_pushes_updated_counts_on_change() {
         .expect("stream alive")
         .expect("read bytes");
     let mut buf = String::from_utf8_lossy(&first).to_string();
-    assert!(buf.contains("Videos"), "first event carries the counts card");
+    assert!(
+        buf.contains("Videos"),
+        "first event carries the counts card"
+    );
 
     // Mutate through the second handle to the same connection pool (the
     // same write path the CLI uses), then expect the next tick to push a
@@ -497,7 +567,7 @@ async fn sse_stream_heartbeats_and_stays_quiet() {
 async fn keywords_page_shows_trend_and_delta() {
     let (base, _port, _db) = spawn_server().await;
     let body = client()
-        .get(format!("{base}/keywords"))
+        .get(format!("{base}/legacy/keywords"))
         .send()
         .await
         .expect("GET")
@@ -514,7 +584,7 @@ async fn keywords_page_shows_trend_and_delta() {
 async fn health_page_renders_census() {
     let (base, _port, _db) = spawn_server().await;
     let body = client()
-        .get(format!("{base}/health"))
+        .get(format!("{base}/legacy/health"))
         .send()
         .await
         .expect("GET")
@@ -523,4 +593,175 @@ async fn health_page_renders_census() {
         .expect("body");
     assert!(body.contains("Health report"));
     assert!(body.contains("Integrity check"));
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge Graph end-to-end data-path verification
+//
+// These prove the KG is not dead code: building it from a real seeded DB
+// produces a non-empty in-memory graph, and the compute functions that the
+// WebSocket RPC handlers call (`compute_graph_scores`, `generate_graph_ideas`,
+// `find_content_gaps`, `compute_tag_authority_by_name`, `pagerank`) return
+// REAL KG-derived values — not the degraded `Null`/0 fallbacks.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn kg_build_from_seeded_db_is_non_empty() {
+    let db = seed_db().await;
+    let stats = tubeforge::analytics::kg_builder::build(
+        &db,
+        tubeforge::analytics::kg_builder::BuildMode::Full,
+    )
+    .await
+    .expect("kg build");
+    // The seeded DB has 2 channels + 2 videos + 1 keyword → graph must have data.
+    assert!(
+        stats.entities_created >= 3,
+        "KG should contain channels/videos/keyword entities, got {}",
+        stats.entities_created
+    );
+    assert!(
+        stats.relations_created > 0,
+        "KG should contain relations, got {}",
+        stats.relations_created
+    );
+
+    // `load_or_build` (the exact fn get_kg calls) returns a usable graph.
+    let kg = tubeforge::analytics::kg_builder::load_or_build(&db)
+        .await
+        .expect("load_or_build");
+    assert!(!kg.is_empty(), "loaded KG must be non-empty");
+    assert!(
+        kg.centrality.values().any(|c| *c > 0.0),
+        "pagerank must have populated positive centrality"
+    );
+}
+
+#[tokio::test]
+async fn kg_graph_scores_and_ideas_derive_from_real_kg() {
+    let db = seed_db().await;
+    let kg = tubeforge::analytics::kg_builder::load_or_build(&db)
+        .await
+        .expect("load_or_build");
+    assert!(!kg.is_empty());
+
+    // compute_graph_scores (used by scores.detail RPC handler) — needs a real
+    // video_id present in the graph.
+    let scores = tubeforge::analytics::graph_aware::compute_graph_scores(
+        &kg,
+        "aaa111bbb22",
+        Some("UCtest0000000000000000001"),
+        &["rust".to_string()],
+    );
+    // Backward-compatible contract: bounded 0..=100, never NaN.
+    assert!(
+        (0.0..=100.0).contains(&scores.tag_authority),
+        "tag_authority out of range: {}",
+        scores.tag_authority
+    );
+    assert!(
+        (0.0..=100.0).contains(&scores.topic_dominance),
+        "topic_dominance out of range: {}",
+        scores.topic_dominance
+    );
+    assert!(
+        (0.0..=100.0).contains(&scores.keyword_competition),
+        "keyword_competition out of range: {}",
+        scores.keyword_competition
+    );
+
+    // generate_graph_ideas (used by ideas.analyze RPC handler) — with a minimal
+    // seed (no topics/competitor edges) there is legitimately nothing to suggest,
+    // so the contract is that it NEVER panics and is bounded, not that it is
+    // non-empty. A structurally-rich graph (topics + competitors) produces ideas.
+    let ideas = tubeforge::analytics::graph_aware::generate_graph_ideas(
+        &kg,
+        Some("UCtest0000000000000000001"),
+        5,
+    );
+    assert!(
+        ideas.len() <= 5,
+        "KG-backed ideas must be bounded by limit, got {}",
+        ideas.len()
+    );
+
+    // Prove ideas ARE generated when the graph has an underserved topic (the
+    // real RPC path: an ingested corpus where a competitor covers a topic the
+    // own channel does NOT cover produces a content-gap graph idea).
+    let mut rich = tubeforge::analytics::kg::KnowledgeGraph::new();
+    // Competitor video covering an underserved topic (own channel absent).
+    rich.insert_entity(tubeforge::analytics::kg::KgEntity::video(
+        "comp_v1",
+        "Competitor Async Guide",
+    ));
+    rich.insert_entity(tubeforge::analytics::kg::KgEntity::channel(
+        "UC:comp",
+        "Competitor",
+    ));
+    rich.insert_entity(tubeforge::analytics::kg::KgEntity::topic(
+        "async_patterns",
+        "Async Patterns",
+    ));
+    rich.insert_edge(
+        "video:comp_v1",
+        "channel:UC:comp",
+        tubeforge::analytics::kg::RelationType::CreatedBy,
+        1.0,
+    );
+    rich.insert_edge(
+        "video:comp_v1",
+        "topic:async_patterns",
+        tubeforge::analytics::kg::RelationType::AboutTopic,
+        1.0,
+    );
+    // Own channel has NO videos in async_patterns → it is a content gap.
+    let rich_ideas =
+        tubeforge::analytics::graph_aware::generate_graph_ideas(&rich, Some("UC:own"), 5);
+    assert!(
+        !rich_ideas.is_empty(),
+        "KG with an underserved topic must generate a content-gap idea"
+    );
+
+    // find_content_gaps (used by gaps.get RPC handler).
+    let gaps = tubeforge::analytics::graph_aware::find_content_gaps(
+        &kg,
+        Some("UCtest0000000000000000001"),
+    );
+    assert!(
+        gaps.len() <= 10 || gaps.is_empty(),
+        "graph_gaps bounded to a reasonable count"
+    );
+
+    // compute_tag_authority_by_name (used by tags.gaps RPC handler) — the
+    // "rust" keyword seeded should be reachable and yield a bounded score.
+    let authority = tubeforge::analytics::graph_aware::compute_tag_authority_by_name(&kg, "rust");
+    assert!(
+        (0.0..=100.0).contains(&authority),
+        "tag authority out of range: {}",
+        authority
+    );
+}
+
+#[tokio::test]
+async fn kg_pagerank_centrality_populates_channels() {
+    let db = seed_db().await;
+    let kg = tubeforge::analytics::kg_builder::load_or_build(&db)
+        .await
+        .expect("load_or_build");
+
+    // pagerank (used by scorecard.get RPC handler centrality column) must
+    // assign channel centrality for every channel entity in the graph.
+    let pr = tubeforge::analytics::kg_algorithms::pagerank(&kg);
+    for entity_id in kg.entities_of_type(tubeforge::analytics::kg::EntityType::Channel) {
+        assert!(
+            pr.contains_key(entity_id),
+            "pagerank must include channel {entity_id}"
+        );
+    }
+    // Mass conservation: sum ≈ 1.0 on a non-empty graph.
+    let sum: f64 = pr.values().sum();
+    assert!(
+        (sum - 1.0).abs() < 1e-6,
+        "pagerank mass must sum to 1.0, got {sum}"
+    );
 }

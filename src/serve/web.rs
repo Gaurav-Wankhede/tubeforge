@@ -28,6 +28,7 @@ use std::sync::Arc;
 
 use http::{HeaderMap, Method, Request, Response as HttpResponse, StatusCode, Uri};
 use http_body_util::BodyExt;
+use hyper::body::Incoming;
 use hyper_util::rt::TokioIo;
 
 use crate::error::TubeforgeError;
@@ -174,7 +175,13 @@ pub struct Router {
     fallback: Option<Handler>,
     /// static-file root with SPA fallback; None disables.
     spa: Option<static_files::Spa>,
+    /// optional WebSocket upgrade handler.
+    ws: Option<WsHandler>,
 }
+
+/// A WebSocket upgrade handler: takes the mutable request and shared state,
+/// performs the upgrade, returns the 101 response.
+pub type WsHandler = fn(&mut http::Request<Incoming>, Arc<ServeState>) -> Option<Response>;
 
 impl Default for Router {
     fn default() -> Self {
@@ -188,15 +195,21 @@ impl Router {
             routes: Vec::new(),
             fallback: None,
             spa: None,
+            ws: None,
         }
+    }
+
+    /// Register a WebSocket upgrade handler for the `/ws` path.
+    pub fn ws(mut self, handler: WsHandler) -> Self {
+        self.ws = Some(handler);
+        self
     }
 
     /// Register a GET route. `handler` is a plain `fn` (see `IntoHandler`
     /// impls for the supported extractor signatures).
-    pub fn get<F, S, Args>(mut self, path: &str, handler: F) -> Self
+    pub fn get<F, Args>(mut self, path: &str, handler: F) -> Self
     where
-        F: IntoHandler<S, Args> + Send + Sync + 'static,
-        S: Send + Sync + 'static,
+        F: IntoHandler<Args> + Send + Sync + 'static,
     {
         self.routes.push(Route {
             method: Method::GET,
@@ -207,10 +220,9 @@ impl Router {
     }
 
     /// Register a POST route.
-    pub fn post<F, S, Args>(mut self, path: &str, handler: F) -> Self
+    pub fn post<F, Args>(mut self, path: &str, handler: F) -> Self
     where
-        F: IntoHandler<S, Args> + Send + Sync + 'static,
-        S: Send + Sync + 'static,
+        F: IntoHandler<Args> + Send + Sync + 'static,
     {
         self.routes.push(Route {
             method: Method::POST,
@@ -221,12 +233,48 @@ impl Router {
     }
 
     /// Set the fallback handler (called when no route matches).
-    pub fn fallback<F, S, Args>(mut self, handler: F) -> Self
+    pub fn fallback<F, Args>(mut self, handler: F) -> Self
     where
-        F: IntoHandler<S, Args> + Send + Sync + 'static,
-        S: Send + Sync + 'static,
+        F: IntoHandler<Args> + Send + Sync + 'static,
     {
         self.fallback = Some(handler.into_handler());
+        self
+    }
+
+    /// Register a route with an explicit method + handler.
+    pub fn route_raw<F, Args>(mut self, method: Method, path: &str, handler: F) -> Self
+    where
+        F: IntoHandler<Args> + Send + Sync + 'static,
+    {
+        self.routes.push(Route {
+            method,
+            pattern: PathPattern::parse(path),
+            handler: handler.into_handler(),
+        });
+        self
+    }
+
+    /// Register a route from a `get(handler)`/`post(handler)` method router.
+    pub fn route<Args>(mut self, path: &str, m: MethodRouter<Args>) -> Self
+    where
+    {
+        self.routes.push(Route {
+            method: m.method,
+            pattern: PathPattern::parse(path),
+            handler: m.handler,
+        });
+        self
+    }
+
+    /// Merge all routes from `other` into `self` (later routes checked first).
+    pub fn merge(mut self, other: Router) -> Self {
+        self.routes.extend(other.routes);
+        if self.fallback.is_none() {
+            self.fallback = other.fallback;
+        }
+        if self.ws.is_none() {
+            self.ws = other.ws;
+        }
         self
     }
 
@@ -262,6 +310,14 @@ impl Router {
             }
         }
 
+        // API namespace owns its 404s (the SPA must not swallow /api typos).
+        if path == "/api" || path.starts_with("/api/") {
+            if let Some(fb) = &self.fallback {
+                return fb(Arc::clone(&state), Vec::new(), query, uri, headers).await;
+            }
+            return json_response(StatusCode::NOT_FOUND, serde_json::json!({"error": "not_found"}));
+        }
+
         // SPA / static fallback.
         if let Some(spa) = &self.spa {
             if let Some(resp) = static_files::try_serve(spa, &method, &path).await {
@@ -277,6 +333,38 @@ impl Router {
         // No fallback: 404.
         json_response(StatusCode::NOT_FOUND, serde_json::json!({"error": "not_found"}))
     }
+}
+
+/// Free function: register a GET route (axum-compatible helper).
+pub fn get<F, Args>(handler: F) -> MethodRouter<Args>
+where
+    F: IntoHandler<Args> + Send + Sync + 'static,
+{
+    MethodRouter {
+        method: Method::GET,
+        handler: handler.into_handler(),
+        _marker: std::marker::PhantomData,
+    }
+}
+
+/// Free function: register a POST route (axum-compatible helper).
+pub fn post<F, Args>(handler: F) -> MethodRouter<Args>
+where
+    F: IntoHandler<Args> + Send + Sync + 'static,
+{
+    MethodRouter {
+        method: Method::POST,
+        handler: handler.into_handler(),
+        _marker: std::marker::PhantomData,
+    }
+}
+
+/// A method + handler pair, produced by `get`/`post` and consumed by
+/// `Router::route`.
+pub struct MethodRouter<Args> {
+    method: Method,
+    handler: Handler,
+    _marker: std::marker::PhantomData<Args>,
 }
 
 /// Parse a query string into a map (first value wins).
@@ -354,26 +442,71 @@ impl<S: Clone + Send + Sync + 'static> FromParts for State<S> {
     }
 }
 
-/// Extractor: parsed query parameters.
-pub struct Query(pub HashMap<String, String>);
+/// Extractor: parsed query parameters (a `HashMap<String, String>`).
+pub struct Query<T>(pub T);
 
-impl FromParts for Query {
+impl FromParts for Query<HashMap<String, String>> {
     fn from_parts(parts: &RequestParts) -> Result<Self, Box<Response>> {
         Ok(Query(parts.query.clone()))
     }
 }
 
-/// Extractor: decoded path captures as strings, in route order.
-pub struct Path(pub Vec<String>);
+/// Extractor: decoded path captures.
+///
+/// Supports `Path<String>` (single capture) and `Path<(A, B)>` (two captures,
+/// e.g. `{id}/{status}`). The tuple elements are decoded from the capture
+/// strings.
+pub struct Path<T>(pub T);
 
-impl FromParts for Path {
+impl FromParts for Path<String> {
     fn from_parts(parts: &RequestParts) -> Result<Self, Box<Response>> {
-        Ok(Path(parts.captures.clone()))
+        match parts.captures.first() {
+            Some(s) => Ok(Path(s.clone())),
+            None => Err(Box::new(json_response(
+                StatusCode::NOT_FOUND,
+                serde_json::json!({"error": "missing path param"}),
+            ))),
+        }
+    }
+}
+
+/// Parse one capture segment into a typed value (i64, String, ...).
+fn parse_capture<T: std::str::FromStr>(s: &str) -> Option<T> {
+    s.parse().ok()
+}
+
+impl FromParts for Path<(i64, String)> {
+    fn from_parts(parts: &RequestParts) -> Result<Self, Box<Response>> {
+        let mut it = parts.captures.iter();
+        let a = it.next().and_then(|s| parse_capture::<i64>(s));
+        let b = it.next().cloned();
+        match (a, b) {
+            (Some(a), Some(b)) => Ok(Path((a, b))),
+            _ => Err(Box::new(json_response(
+                StatusCode::NOT_FOUND,
+                serde_json::json!({"error": "missing path params"}),
+            ))),
+        }
+    }
+}
+
+impl FromParts for Path<(String, String)> {
+    fn from_parts(parts: &RequestParts) -> Result<Self, Box<Response>> {
+        let mut it = parts.captures.iter();
+        let a = it.next().cloned();
+        let b = it.next().cloned();
+        match (a, b) {
+            (Some(a), Some(b)) => Ok(Path((a, b))),
+            _ => Err(Box::new(json_response(
+                StatusCode::NOT_FOUND,
+                serde_json::json!({"error": "missing path params"}),
+            ))),
+        }
     }
 }
 
 /// Extractor: the raw request headers.
-pub struct Headers(pub HeaderMap);
+pub struct Headers(pub http::HeaderMap);
 
 impl FromParts for Headers {
     fn from_parts(parts: &RequestParts) -> Result<Self, Box<Response>> {
@@ -392,7 +525,7 @@ impl FromParts for ReqUri {
 
 /// Convert a handler into a boxed handler. `Args` is a marker tuple of the
 /// extractor types the handler takes (e.g. `(State<AppState>,)`).
-pub trait IntoHandler<S, Args> {
+pub trait IntoHandler<Args> {
     fn into_handler(self) -> Handler;
 }
 
@@ -417,12 +550,11 @@ macro_rules! impl_handler {
     ($(($($T:ident),*)),* $(,)?) => {
         $(
             #[allow(unreachable_patterns, unused_variables, non_snake_case)]
-            impl<F, Fut, R, S, $($T),*> IntoHandler<S, ($($T,)*)> for F
+            impl<F, Fut, R, $($T),*> IntoHandler<($($T,)*)> for F
             where
                 F: Fn($($T),*) -> Fut + Copy + Send + Sync + 'static,
                 Fut: Future<Output = R> + Send + 'static,
                 R: IntoResponse + 'static,
-                S: Send + Sync + 'static,
                 $($T: FromParts + Send,)*
             {
                 fn into_handler(self) -> Handler {
@@ -499,7 +631,11 @@ impl IntoResponse for String {
 
 impl IntoResponse for Html {
     fn into_response(self) -> Response {
-        Response::new(self.0)
+        HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "text/html; charset=utf-8")
+            .body(full(hyper::body::Bytes::from(self.0)))
+            .expect("html response")
     }
 }
 
@@ -519,7 +655,8 @@ impl IntoResponse for (StatusCode, Html) {
     fn into_response(self) -> Response {
         HttpResponse::builder()
             .status(self.0)
-            .body(self.1.0)
+            .header("content-type", "text/html; charset=utf-8")
+            .body(full(hyper::body::Bytes::from(self.1.0)))
             .expect("status+html response")
     }
 }
@@ -589,14 +726,8 @@ where
 /// A JSON response body wrapper.
 pub struct Json(pub serde_json::Value);
 
-/// An HTML response body wrapper (plain text/html).
-pub struct Html(pub Body);
-
-impl Html {
-    pub fn new(s: impl Into<hyper::body::Bytes>) -> Self {
-        Html(full(s.into()))
-    }
-}
+/// An HTML response body wrapper.
+pub struct Html(pub String);
 
 /// Build a JSON response with a status code.
 pub fn json_response(status: StatusCode, value: serde_json::Value) -> Response {
@@ -613,44 +744,69 @@ pub fn json_response(status: StatusCode, value: serde_json::Value) -> Response {
 // ---------------------------------------------------------------------------
 
 /// Run the server: accept connections on `listener`, serve HTTP/1, and stop
-/// accepting when `shutdown` resolves (in-flight connections drain).
+/// accepting when Ctrl-C is received.
 pub async fn serve(
     listener: tokio::net::TcpListener,
     router: Arc<Router>,
     state: Arc<ServeState>,
 ) -> Result<(), TubeforgeError> {
     loop {
-        let (stream, _peer) = match listener.accept().await {
-            Ok(x) => x,
-            Err(e) => {
-                // Transient accept errors (e.g. too many FDs): brief backoff.
-                tracing::warn!("accept error: {e}");
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                continue;
-            }
-        };
-        let io = TokioIo::new(stream);
-        let router = Arc::clone(&router);
-        let state = Arc::clone(&state);
-        tokio::spawn(async move {
-            let service = hyper::service::service_fn(move |req| {
+        let accept = listener.accept();
+        tokio::pin!(accept);
+        tokio::select! {
+            res = &mut accept => {
+                let (stream, _peer) = match res {
+                    Ok(x) => x,
+                    Err(e) => {
+                        tracing::warn!("accept error: {e}");
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        continue;
+                    }
+                };
+                let io = TokioIo::new(stream);
                 let router = Arc::clone(&router);
                 let state = Arc::clone(&state);
-                async move {
-                    let (parts, _body) = req.into_parts();
-                    let body = full(hyper::body::Bytes::new());
-                    let req = Request::from_parts(parts, body);
-                    Ok::<_, std::convert::Infallible>(router.serve(req, state).await)
-                }
-            });
-            let conn = hyper::server::conn::http1::Builder::new()
-                .serve_connection(io, service)
-                .with_upgrades();
-            if let Err(e) = conn.await {
-                tracing::warn!("connection error: {e}");
+                let ws = router.ws;
+                tokio::spawn(async move {
+                    let service = hyper::service::service_fn(move |req| {
+                        let router = Arc::clone(&router);
+                        let state = Arc::clone(&state);
+                        async move {
+                            // WebSocket upgrade path: needs the Incoming body.
+                            if req.method() == Method::GET && req.uri().path() == "/ws" {
+                                if let Some(ws) = ws {
+                                    let mut req = req;
+                                    if let Some(resp) = ws(&mut req, Arc::clone(&state)) {
+                                        return Ok::<_, std::convert::Infallible>(resp);
+                                    }
+                                    // Upgrade rejected: fall through normally.
+                                    return Ok::<_, std::convert::Infallible>(router.serve(
+                                        Request::from_parts(req.into_parts().0, full(hyper::body::Bytes::new())),
+                                        state,
+                                    ).await);
+                                }
+                            }
+                            let (parts, _body) = req.into_parts();
+                            let body = full(hyper::body::Bytes::new());
+                            let req = Request::from_parts(parts, body);
+                            Ok::<_, std::convert::Infallible>(router.serve(req, state).await)
+                        }
+                    });
+                    let conn = hyper::server::conn::http1::Builder::new()
+                        .serve_connection(io, service)
+                        .with_upgrades();
+                    if let Err(e) = conn.await {
+                        tracing::warn!("connection error: {e}");
+                    }
+                });
             }
-        });
+            _ = tokio::signal::ctrl_c() => {
+                tracing::info!("serve: shutdown signal received");
+                break;
+            }
+        }
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -666,8 +822,11 @@ mod tests {
         format!("n={}", s.n).into_response()
     }
 
-    async fn hello(State(_s): State<TestState>, Path(caps): Path, Query(q): Query) -> Response {
-        let who = caps.first().cloned().unwrap_or_default();
+    async fn hello(
+        State(_s): State<TestState>,
+        Path(who): Path<String>,
+        Query(q): Query<HashMap<String, String>>,
+    ) -> Response {
         let extra = q.get("x").cloned().unwrap_or_default();
         format!("hello {who} x={extra}").into_response()
     }
@@ -678,9 +837,9 @@ mod tests {
 
     fn make_router() -> Router {
         Router::new()
-            .get::<_, TestState, (State<TestState>,)>("/", home)
-            .get::<_, TestState, (State<TestState>, Path, Query)>("/hello/{name}", hello)
-            .post::<_, TestState, (Headers,)>("/head", header_test)
+            .get("/", home)
+            .get("/hello/{name}", hello)
+            .post("/head", header_test)
     }
 
     async fn call(router: &Router, method: Method, path: &str) -> String {
