@@ -68,6 +68,35 @@ pub async fn run_with_keywords(
         &geo_meta,
     );
 
+    // PRD v4.2 supporting layer: high-CTR packaging psychology from the
+    // researched creators (Martell/Hormozi/etc.). Computed separately and
+    // surfaced alongside — never blended into the SEO total, which stays the
+    // honest, primary rank-or-not signal.
+    let psych = scoring::psych::score(&title);
+    let psych_detected: Vec<Value> = psych
+        .detected
+        .iter()
+        .map(|f| {
+            json!({
+                "formula": format!("{:?}", f).to_lowercase(),
+                "label": f.label(),
+            })
+        })
+        .collect();
+
+    // Phase 6.6: actionable checklist from the SEO components.
+    let recommendations: Vec<Value> =
+        scoring::recommend::recommendations(&result.seo_struct, &title, &desc, &tags, &eff)
+            .iter()
+            .map(|r| {
+                json!({
+                    "component": r.component,
+                    "message": r.message,
+                    "current": r.current,
+                })
+            })
+            .collect();
+
     // Persist for stored videos so ingest/scores stay consistent (§6.4).
     if let Some(vid) = &video_id {
         let db = Db::open(&cfg.db_path).await?;
@@ -86,6 +115,12 @@ pub async fn run_with_keywords(
             "components": result.geo_components,
         },
         "total": result.total,
+        "psychology": {
+            "total": psych.total,
+            "detected": psych_detected,
+            "variants": scoring::psych::variants(&title, None),
+        },
+        "recommendations": recommendations,
     }))
 }
 
@@ -95,7 +130,16 @@ pub async fn run_with_keywords(
 async fn resolve_input(
     cfg: &Config,
     input: &ScoreInput,
-) -> Result<(Option<String>, String, String, Vec<String>, crate::scoring::geo::GeoMeta), TubeforgeError> {
+) -> Result<
+    (
+        Option<String>,
+        String,
+        String,
+        Vec<String>,
+        crate::scoring::geo::GeoMeta,
+    ),
+    TubeforgeError,
+> {
     if let Some(vid) = &input.video_id {
         let db = Db::open(&cfg.db_path).await?;
         let row = db
@@ -128,6 +172,12 @@ async fn resolve_input(
                 "score needs --video-id or at least one --draft-* flag".into(),
             ));
         }
-        Ok((None, title, desc, tags, crate::scoring::geo::GeoMeta::default()))
+        Ok((
+            None,
+            title,
+            desc,
+            tags,
+            crate::scoring::geo::GeoMeta::default(),
+        ))
     }
 }
