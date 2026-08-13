@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 use crate::analytics::reports;
 use crate::config::Config;
 use crate::error::TubeforgeError;
-use crate::fetch::api::{AvailabilityItem, ApiClient, BATCH_MAX};
+use crate::fetch::api::{ApiClient, AvailabilityItem, BATCH_MAX};
 use crate::fetch::FetchClients;
 use crate::storage::Db;
 
@@ -50,8 +50,8 @@ pub async fn run(cfg: &Config, ids: &[String]) -> Result<Value, TubeforgeError> 
                 Some(v) => out.push((v.video_id.clone(), v.channel_id.clone())),
                 None => {
                     return Err(TubeforgeError::Usage(format!(
-                        "video not in database: {id} — `check availability` only covers stored videos"
-                    )))
+                    "video not in database: {id} — `check availability` only covers stored videos"
+                )))
                 }
             }
         }
@@ -133,38 +133,52 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/videos"))
             .and(query_param("part", "snippet,status"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_string(
-                    r#"{"items": [
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"items": [
                         {"id": "aaa111bbb22", "snippet": {"channelId": "UCx1"},
                          "status": {"privacyStatus": "public"}},
                         {"id": "bbb222ccc33", "snippet": {"channelId": "UCx1"},
                          "status": {"privacyStatus": "unlisted"}}
                     ]}"#,
-                ),
-            )
+            ))
             .mount(&mock)
             .await;
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let db = Db::open(&dir.path().join("a.db")).await.expect("open");
-        for id in ["aaa111bbb22", "bbb222ccc33", "ccc333ddd44"] {
-            db.conn
-                .execute(
-                    "INSERT INTO videos (video_id, title, published_at, fetched_at, updated_at) \
-                     VALUES (?1, 't', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', \
-                             '2026-01-01T00:00:00Z')",
-                    [id],
-                )
-                .await
-                .expect("insert");
+        let mut db = Db::open(&dir.path().join("a.db")).await.expect("open");
+        {
+            let at = "2026-01-01T00:00:00Z";
+            let mut batch = db.begin_batch().await.expect("batch");
+            for id in ["aaa111bbb22", "bbb222ccc33", "ccc333ddd44"] {
+                batch
+                    .upsert_video(&crate::storage::db::VideoRow {
+                        video_id: id.to_string(),
+                        title: "t".to_string(),
+                        published_at: at.to_string(),
+                        fetched_at: at.to_string(),
+                        updated_at: at.to_string(),
+                        source: "rss".to_string(),
+                        ..Default::default()
+                    })
+                    .await
+                    .expect("insert");
+            }
+            batch.commit().await.expect("commit");
         }
 
         let api = ApiClient::new(
             &FetchClients::for_test(&mock.uri(), std::time::Duration::from_secs(5)).expect("c"),
             "test-key",
         );
-        let items = api.fetch_availability(&db, &["aaa111bbb22".into(), "bbb222ccc33".into(), "ccc333ddd44".into()])
+        let items = api
+            .fetch_availability(
+                &db,
+                &[
+                    "aaa111bbb22".into(),
+                    "bbb222ccc33".into(),
+                    "ccc333ddd44".into(),
+                ],
+            )
             .await
             .expect("fetch");
         assert_eq!(items.len(), 2, "missing id absent from response");
@@ -198,9 +212,17 @@ mod tests {
         );
 
         // Survivors got their privacy snapshot.
-        db.set_privacy_status("aaa111bbb22", Some("public")).await.expect("ps");
-        db.set_privacy_status("bbb222ccc33", Some("unlisted")).await.expect("ps");
-        let v = db.get_video("bbb222ccc33").await.expect("get").expect("row");
+        db.set_privacy_status("aaa111bbb22", Some("public"))
+            .await
+            .expect("ps");
+        db.set_privacy_status("bbb222ccc33", Some("unlisted"))
+            .await
+            .expect("ps");
+        let v = db
+            .get_video("bbb222ccc33")
+            .await
+            .expect("get")
+            .expect("row");
         assert_eq!(v.privacy_status.as_deref(), Some("unlisted"));
     }
 
@@ -211,11 +233,9 @@ mod tests {
         let mock = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/videos"))
-            .respond_with(
-                ResponseTemplate::new(404).set_body_string(
-                    r#"{"error": {"code": 404, "errors": [{"reason": "videoNotFound"}]}}"#,
-                ),
-            )
+            .respond_with(ResponseTemplate::new(404).set_body_string(
+                r#"{"error": {"code": 404, "errors": [{"reason": "videoNotFound"}]}}"#,
+            ))
             .mount(&mock)
             .await;
 

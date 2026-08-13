@@ -13,7 +13,7 @@ use crate::error::TubeforgeError;
 use crate::fetch::quota::{self, DAILY_LIMIT};
 use crate::search::bm25::Bm25;
 use crate::search::FIELD_TITLE;
-use crate::storage::db::{ChannelRow, VideoRow, Db};
+use crate::storage::db::{ChannelRow, Db, VideoRow};
 use crate::util;
 
 /// Days after which a channel counts as stale (TUBEFORGE_STALE_DAYS,
@@ -36,7 +36,9 @@ pub fn median(values: &mut [f64]) -> f64 {
 
 /// Per-channel category distribution rendered by display name (A3); unknown
 /// category ids render raw. Deterministic: BTreeMap keys sort lexically.
-pub fn category_breakdown<'a>(videos: impl IntoIterator<Item = &'a VideoRow>) -> BTreeMap<String, usize> {
+pub fn category_breakdown<'a>(
+    videos: impl IntoIterator<Item = &'a VideoRow>,
+) -> BTreeMap<String, usize> {
     let mut m = BTreeMap::new();
     for v in videos {
         if let Some(cid) = &v.category_id {
@@ -90,7 +92,10 @@ pub async fn scorecard(db: &Db, only: &[String]) -> Result<Value, TubeforgeError
     let mut tag_sets: HashMap<&str, HashSet<String>> = HashMap::new();
     for c in &set {
         let mut tokens = HashSet::new();
-        for v in videos.iter().filter(|v| v.channel_id.as_deref() == Some(&c.channel_id)) {
+        for v in videos
+            .iter()
+            .filter(|v| v.channel_id.as_deref() == Some(&c.channel_id))
+        {
             if let Ok(tags) = serde_json::from_str::<Vec<String>>(&v.tags) {
                 for t in tags {
                     tokens.extend(util::tokens(&t));
@@ -109,10 +114,7 @@ pub async fn scorecard(db: &Db, only: &[String]) -> Result<Value, TubeforgeError
             .collect();
         chan_videos.sort_by(|a, b| b.published_at.cmp(&a.published_at));
 
-        let total_views: i64 = chan_videos
-            .iter()
-            .map(|v| v.view_count.unwrap_or(0))
-            .sum();
+        let total_views: i64 = chan_videos.iter().map(|v| v.view_count.unwrap_or(0)).sum();
         let recent: i64 = chan_videos
             .iter()
             .take(3)
@@ -134,7 +136,11 @@ pub async fn scorecard(db: &Db, only: &[String]) -> Result<Value, TubeforgeError
 
         let n = chan_videos.len() as f64;
         let avg_title_len = if n > 0.0 {
-            chan_videos.iter().map(|v| v.title.chars().count()).sum::<usize>() as f64 / n
+            chan_videos
+                .iter()
+                .map(|v| v.title.chars().count())
+                .sum::<usize>() as f64
+                / n
         } else {
             0.0
         };
@@ -439,7 +445,10 @@ pub async fn evaluate_alerts(
                         db,
                         "brand",
                         None,
-                        &format!("brand keyword '{}' absent from competitor top titles", kw.keyword),
+                        &format!(
+                            "brand keyword '{}' absent from competitor top titles",
+                            kw.keyword
+                        ),
                         "warn",
                     )
                     .await?;
@@ -498,11 +507,7 @@ pub async fn insert_once(
     message: &str,
     severity: &str,
 ) -> Result<usize, TubeforgeError> {
-    if db.alert_exists(kind, channel_id, message).await? {
-        return Ok(0);
-    }
-    db.insert_alert(kind, channel_id, message, severity).await?;
-    Ok(1)
+    db.insert_alert(kind, channel_id, message, severity).await
 }
 
 fn round2(v: f64) -> f64 {
@@ -532,7 +537,13 @@ mod tests {
             ..Default::default()
         };
         // 42 → "Shorts", 28 → "Science & Technology", unknown → raw id.
-        let videos = [mk(Some("42")), mk(Some("28")), mk(Some("42")), mk(Some("999")), mk(None)];
+        let videos = [
+            mk(Some("42")),
+            mk(Some("28")),
+            mk(Some("42")),
+            mk(Some("999")),
+            mk(None),
+        ];
         let m = category_breakdown(videos.iter());
         assert_eq!(m.get("Shorts"), Some(&2));
         assert_eq!(m.get("Science & Technology"), Some(&1));
@@ -546,27 +557,40 @@ mod tests {
     #[tokio::test]
     async fn health_reports_disabled_metrics() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let db = Db::open(&dir.path().join("h.db")).await.expect("open db");
+        let mut db = Db::open(&dir.path().join("h.db")).await.expect("open db");
         let at = "2026-08-01T00:00:00Z";
-        for (id, source, view, like, comment) in [
-            ("aaa111bbb22", "api", Some(100), None, None),
-            ("bbb222ccc33", "rss", Some(100), None, None),
-            ("ccc333ddd44", "oembed", Some(5), Some(2), Some(1)),
-        ] {
-            db.conn
-                .execute(
-                    "INSERT INTO videos (video_id, title, published_at, fetched_at, updated_at, \
-                                         source, view_count, like_count, comment_count) \
-                     VALUES (?1, 't', ?2, ?2, ?2, ?3, ?4, ?5, ?6)",
-                    turso::params!(id, at, source, view, like, comment),
-                )
-                .await
-                .expect("insert video");
+        {
+            let mut batch = db.begin_batch().await.expect("batch");
+            for (id, source, view, like, comment) in [
+                ("aaa111bbb22", "api", Some(100), None, None),
+                ("bbb222ccc33", "rss", Some(100), None, None),
+                ("ccc333ddd44", "oembed", Some(5), Some(2), Some(1)),
+            ] {
+                batch
+                    .upsert_video(&crate::storage::db::VideoRow {
+                        video_id: id.to_string(),
+                        title: "t".to_string(),
+                        published_at: at.to_string(),
+                        fetched_at: at.to_string(),
+                        updated_at: at.to_string(),
+                        source: source.to_string(),
+                        view_count: view,
+                        like_count: like,
+                        comment_count: comment,
+                        ..Default::default()
+                    })
+                    .await
+                    .expect("insert video");
+            }
+            batch.commit().await.expect("commit");
         }
 
         let h = health(&db, 14).await.expect("health");
         let m = &h["metadata_completeness"];
-        assert_eq!(m["disabled_metrics"]["videos"], 1, "api row with NULL like/comment");
+        assert_eq!(
+            m["disabled_metrics"]["videos"], 1,
+            "api row with NULL like/comment"
+        );
         assert_eq!(m["disabled_metrics"]["view_count"], 0);
         assert_eq!(m["disabled_metrics"]["like_count"], 1);
         assert_eq!(m["disabled_metrics"]["comment_count"], 1);

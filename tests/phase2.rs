@@ -8,8 +8,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use serde_json::json;
-use tubeforge::cli::AlertsAction;
 use tubeforge::analytics::keywords as akeywords;
+use tubeforge::cli::AlertsAction;
 use tubeforge::commands::{alerts, health, ideas, score, scorecard};
 use tubeforge::config::Config;
 use tubeforge::ingest::{self, IngestOptions};
@@ -23,8 +23,12 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 const CHANNEL_ID: &str = "UCa1b2c3d4e5f6g7h8i9j0kLM";
 
 fn fixture(name: &str) -> String {
-    std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name))
-        .expect("fixture exists")
+    std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(name),
+    )
+    .expect("fixture exists")
 }
 
 fn test_config(dir: &Path) -> Config {
@@ -37,6 +41,11 @@ fn test_config(dir: &Path) -> Config {
         youtube_api_key: Some("test-key".to_string()),
         quota_warn_at: 90,
         chromium_dir: dir.join("chromium"),
+        ytdlp_path: "yt-dlp".into(),
+        ytdlp_enabled: false,
+        ytdlp_client: None,
+        ytdlp_js_runtime: None,
+        own_channel: None,
     }
 }
 
@@ -61,10 +70,14 @@ async fn seed_channel(cfg: &Config) -> Db {
     let mut db = Db::open(&cfg.db_path).await.expect("open db");
     ingest::ingest_channels(
         cfg,
-        &tubeforge::fetch::FetchClients::for_test(&mock.uri(), Duration::from_secs(5)).expect("clients"),
+        &tubeforge::fetch::FetchClients::for_test(&mock.uri(), Duration::from_secs(5))
+            .expect("clients"),
         &mut db,
         &[CHANNEL_ID.to_string()],
-        &IngestOptions { use_api: false, no_backup: false },
+        &IngestOptions {
+            use_api: false,
+            no_backup: false,
+        },
     )
     .await
     .expect("ingest");
@@ -87,7 +100,11 @@ async fn p2_score_persistence_roundtrip() {
 
     // Ingest recomputed scores for the 3 changed videos (LLD §6.4).
     assert_eq!(db.count("SELECT count(*) FROM scores").await.unwrap(), 3);
-    let row = db.get_score("aaa111bbb22").await.expect("score").expect("exists");
+    let row = db
+        .get_score("aaa111bbb22")
+        .await
+        .expect("score")
+        .expect("exists");
     assert!(row.seo_score > 0.0 && row.seo_score <= 100.0);
     assert!(row.geo_score >= 0.0 && row.geo_score <= 100.0);
     let comp: serde_json::Value = serde_json::from_str(&row.components).expect("components json");
@@ -111,13 +128,25 @@ async fn p2_score_persistence_roundtrip() {
     assert!(out["geo"]["total"].is_f64());
     assert!(out["total"].is_f64());
     for c in [
-        "keyword_title", "title_front", "title_length", "title_hooks", "keyword_desc",
-        "desc_first150", "desc_structure", "tags_relevance", "tags_quality", "keyword_tags",
+        "keyword_title",
+        "title_front",
+        "title_length",
+        "title_hooks",
+        "keyword_desc",
+        "desc_first150",
+        "desc_structure",
+        "tags_relevance",
+        "tags_quality",
+        "keyword_tags",
     ] {
         assert!(out["seo"]["components"][c].is_f64(), "seo component {c}");
     }
     for c in [
-        "entity_coverage", "qa_phrasing", "list_phrasing", "conversational", "metadata_complete",
+        "entity_coverage",
+        "qa_phrasing",
+        "list_phrasing",
+        "conversational",
+        "metadata_complete",
     ] {
         assert!(out["geo"]["components"][c].is_f64(), "geo component {c}");
     }
@@ -128,15 +157,27 @@ async fn p2_score_persistence_roundtrip() {
         &score::ScoreInput {
             video_id: None,
             draft_title: Some("Rust Database Engineering Guide".to_string()),
-            draft_desc: Some("What is a database? How to build one in Rust. 0:00 intro\n- bullet".to_string()),
+            draft_desc: Some(
+                "What is a database? How to build one in Rust. 0:00 intro\n- bullet".to_string(),
+            ),
             draft_tags: Some("rust,database,tutorial".to_string()),
         },
     )
     .await
     .expect("score draft");
     assert_eq!(draft["video_id"], serde_json::Value::Null);
-    assert!(draft["seo"]["components"]["keyword_title"].as_f64().unwrap() > 0.0);
-    assert!(draft["geo"]["components"]["entity_coverage"].as_f64().unwrap() > 0.0);
+    assert!(
+        draft["seo"]["components"]["keyword_title"]
+            .as_f64()
+            .unwrap()
+            > 0.0
+    );
+    assert!(
+        draft["geo"]["components"]["entity_coverage"]
+            .as_f64()
+            .unwrap()
+            > 0.0
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -178,7 +219,9 @@ async fn p2_ideas_generation_and_status_save() {
     assert_eq!(n as usize, out["ideas"].as_array().unwrap().len());
 
     // Invalid status is a Usage error.
-    let err = ideas::run(&cfg, 5, None, Some("bogus")).await.expect_err("bogus status");
+    let err = ideas::run(&cfg, 5, None, Some("bogus"))
+        .await
+        .expect_err("bogus status");
     assert!(matches!(err, tubeforge::error::TubeforgeError::Usage(_)));
 }
 
@@ -192,7 +235,9 @@ async fn p2_keywords_check_snapshot_trend() {
     let cfg = test_config(dir.path());
     let db = seed_channel(&cfg).await;
 
-    db.add_keywords(&["database".to_string()], None).await.expect("add");
+    db.add_keywords(&["database".to_string()], None)
+        .await
+        .expect("add");
 
     let videos = db.all_videos().await.expect("videos");
     let own: HashSet<String> = HashSet::new(); // no competitors yet → all videos own
@@ -208,18 +253,21 @@ async fn p2_keywords_check_snapshot_trend() {
     assert_eq!(ranks[0].video_id.as_deref(), Some("aaa111bbb22"));
 
     // The fixture channel becomes a competitor → no own videos remain.
-    db.conn
-        .execute(
-            "INSERT INTO competitors (channel_id, label, added_at) VALUES (?1, 'Fixture', ?2)",
-            turso::params!(CHANNEL_ID, "2026-08-01T00:00:00Z"),
-        )
+    db.register_competitors(&[CHANNEL_ID.to_string()], "Fixture")
         .await
         .expect("competitor");
 
     // Check 2 (≥1s later — the snapshot PK is (keyword, checked_at)).
     tokio::time::sleep(Duration::from_secs(1)).await;
-    let comp: HashSet<String> = db.list_competitors().await.expect("competitors").into_iter().collect();
-    akeywords::check(&db, &bm25(&cfg), &videos, &comp).await.expect("check 2");
+    let comp: HashSet<String> = db
+        .list_competitors()
+        .await
+        .expect("competitors")
+        .into_iter()
+        .collect();
+    akeywords::check(&db, &bm25(&cfg), &videos, &comp)
+        .await
+        .expect("check 2");
 
     // Trend: 2 snapshots; the newest is unranked (NULL position) → delta NULL.
     let report = akeywords::report(&db).await.expect("report");
@@ -242,12 +290,17 @@ async fn p2_keyword_snapshot_carries_topics() {
     let dir = tempfile::tempdir().expect("tempdir");
     let cfg = test_config(dir.path());
     let mut db = seed_channel(&cfg).await;
-    db.add_keywords(&["database".to_string()], None).await.expect("add");
+    db.add_keywords(&["database".to_string()], None)
+        .await
+        .expect("add");
 
     // Enrich the winning video with topic categories (C2) directly through
     // the repository write path.
     let videos = db.all_videos().await.expect("videos");
-    let winning = videos.iter().find(|v| v.video_id == "aaa111bbb22").expect("winning video");
+    let winning = videos
+        .iter()
+        .find(|v| v.video_id == "aaa111bbb22")
+        .expect("winning video");
     let mut enriched = winning.clone();
     enriched.topic_categories = serde_json::to_string(&[
         "https://en.wikipedia.org/wiki/Artificial_intelligence".to_string(),
@@ -260,13 +313,15 @@ async fn p2_keyword_snapshot_carries_topics() {
 
     let videos = db.all_videos().await.expect("videos");
     let own: HashSet<String> = HashSet::new();
-    akeywords::check(&db, &bm25(&cfg), &videos, &own).await.expect("check");
+    akeywords::check(&db, &bm25(&cfg), &videos, &own)
+        .await
+        .expect("check");
 
     // Snapshot row carries the derived labels (last URL segment, _ → space).
     let ranks = db.list_rankings().await.expect("rankings");
     assert_eq!(ranks.len(), 1);
-    let topics: Vec<String> = serde_json::from_str(ranks[0].topics.as_deref().expect("topics"))
-        .expect("topics json");
+    let topics: Vec<String> =
+        serde_json::from_str(ranks[0].topics.as_deref().expect("topics")).expect("topics json");
     assert_eq!(topics, vec!["Artificial intelligence", "Deep learning"]);
 
     // Report trend JSON surfaces them as an array.
@@ -289,15 +344,13 @@ async fn p2_scorecard_health_alerts_end_to_end() {
 
     // Make the fixture channel a competitor (scorecard default set + the
     // "new competitor detected" alert rule).
-    db.conn
-        .execute(
-            "INSERT INTO competitors (channel_id, label, added_at) VALUES (?1, 'Fixture', ?2)",
-            turso::params!(CHANNEL_ID, "2026-08-01T00:00:00Z"),
-        )
+    db.register_competitors(&[CHANNEL_ID.to_string()], "Fixture")
         .await
         .expect("competitor");
     // A tracked keyword that no competitor title contains → brand alert.
-    db.add_keywords(&["nonexistentkeyword".to_string()], None).await.expect("kw");
+    db.add_keywords(&["nonexistentkeyword".to_string()], None)
+        .await
+        .expect("kw");
 
     // ---- scorecard ----
     let sc = scorecard::run(&cfg, &[]).await.expect("scorecard");
@@ -324,7 +377,10 @@ async fn p2_scorecard_health_alerts_end_to_end() {
     // ---- alerts: rules fire once, then stay idempotent ----
     let a1 = alerts::run(&cfg, None, false).await.expect("alerts run");
     let inserted = a1["inserted"].as_u64().expect("inserted");
-    assert!(inserted >= 2, "brand + new-competitor alerts fired, got {inserted}");
+    assert!(
+        inserted >= 2,
+        "brand + new-competitor alerts fired, got {inserted}"
+    );
     let kinds: HashSet<String> = a1["alerts"]
         .as_array()
         .unwrap()
@@ -332,29 +388,90 @@ async fn p2_scorecard_health_alerts_end_to_end() {
         .filter_map(|a| a["kind"].as_str().map(String::from))
         .collect();
     assert!(kinds.contains("brand"), "brand rule fired: {kinds:?}");
-    assert!(kinds.contains("gap"), "new-competitor rule fired: {kinds:?}");
+    assert!(
+        kinds.contains("gap"),
+        "new-competitor rule fired: {kinds:?}"
+    );
 
     // Re-running evaluates no NEW alerts (dedupe by kind+channel+message).
     let a2 = alerts::run(&cfg, None, false).await.expect("alerts rerun");
     assert_eq!(a2["inserted"], 0, "idempotent rule evaluation");
 
     // `alerts list` never evaluates.
-    let l = alerts::run(&cfg, Some(AlertsAction::List), false).await.expect("alerts list");
+    let l = alerts::run(&cfg, Some(AlertsAction::List), false)
+        .await
+        .expect("alerts list");
     assert_eq!(l["inserted"], 0);
-    assert_eq!(l["alerts"].as_array().unwrap().len(), a1["alerts"].as_array().unwrap().len());
+    assert_eq!(
+        l["alerts"].as_array().unwrap().len(),
+        a1["alerts"].as_array().unwrap().len()
+    );
 
     // `--mark-read` stamps read_at; `alerts clear` empties the table.
     let m = alerts::run(&cfg, None, true).await.expect("mark read");
     assert!(m["marked_read"].as_u64().unwrap() >= 2);
-    let c2 = alerts::run(&cfg, Some(AlertsAction::Clear), false).await.expect("clear");
-    assert_eq!(c2["cleared"].as_u64().unwrap(), a1["alerts"].as_array().unwrap().len() as u64);
-    let empty = alerts::run(&cfg, Some(AlertsAction::List), false).await.expect("list empty");
+    let c2 = alerts::run(&cfg, Some(AlertsAction::Clear), false)
+        .await
+        .expect("clear");
+    assert_eq!(
+        c2["cleared"].as_u64().unwrap(),
+        a1["alerts"].as_array().unwrap().len() as u64
+    );
+    let empty = alerts::run(&cfg, Some(AlertsAction::List), false)
+        .await
+        .expect("list empty");
     assert!(empty["alerts"].as_array().unwrap().is_empty());
 }
 
 // ---------------------------------------------------------------------------
 // Envelope shape (LLD §4.2) — the machine contract agents rely on.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// §6.6 `register_competitors` (research discover): idempotent INSERT OR IGNORE
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn p2_register_competitors_is_idempotent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cfg = test_config(dir.path());
+    let db = Db::open(&cfg.db_path).await.expect("open db");
+
+    // First registration adds both.
+    let added = db
+        .register_competitors(
+            &[
+                CHANNEL_ID.to_string(),
+                "UCx5XG1OV2P6uZZ5FSM9Ttw".to_string(),
+            ],
+            "discover:rust",
+        )
+        .await
+        .expect("register");
+    assert_eq!(added, 2);
+
+    // Re-registering the same ids (as discover re-runs would) adds 0.
+    let again = db
+        .register_competitors(
+            &[
+                CHANNEL_ID.to_string(),
+                "UCx5XG1OV2P6uZZ5FSM9Ttw".to_string(),
+            ],
+            "discover:rust",
+        )
+        .await
+        .expect("register again");
+    assert_eq!(again, 0);
+
+    // list_competitors sees them exactly once each; blank ids are skipped.
+    let _ = db
+        .register_competitors(&["   ".to_string(), "".to_string()], "skip")
+        .await
+        .expect("blank skip");
+    let comps = db.list_competitors().await.expect("list");
+    assert_eq!(comps.len(), 2);
+    assert!(comps.contains(&CHANNEL_ID.to_string()));
+}
 
 #[test]
 fn p2_envelope_shape() {

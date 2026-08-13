@@ -191,6 +191,22 @@ impl Engine {
         Ok(engine)
     }
 
+    /// Re-read the checkpoint and re-replay the WAL from disk, replacing the
+    /// in-memory snapshot so this engine observes every write committed by any
+    /// handle to the same database file. Retains the in-memory schema
+    /// registrations (created at open, not necessarily checkpointed yet).
+    pub fn reload(&mut self) -> Result<(), TubeforgeError> {
+        let schema = std::mem::take(&mut self.tables);
+        self.data.clear();
+        self.uniques.clear();
+        self.load_checkpoint()?;
+        for (name, sch) in schema {
+            self.tables.entry(name).or_insert(sch);
+        }
+        self.replay_wal()?;
+        Ok(())
+    }
+
     // -- schema ------------------------------------------------------------
 
     /// Register (or update) a table schema. Must be called before any row ops

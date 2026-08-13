@@ -1,9 +1,11 @@
-//! tfdb-backed repository (parallel implementation of the legacy turso `Db`).
+//! tfdb-backed repository (migration of the legacy turso `Db`).
 //!
-//! Same public API as `db.rs`, but built on `crate::tfdb` (the from-scratch
-//! engine) instead of turso. All methods are synchronous because tfdb is
-//! synchronous. The legacy `Db` in `db.rs` is kept untouched; this module is a
-//! separate, self-contained implementation so the two can coexist.
+//! Same public API as the legacy `db.rs`, but built on `crate::tfdb` (the
+//! from-scratch engine) instead of turso. The engine is synchronous, so each
+//! method wraps its work in an `async` block to keep the historical
+//! `.await`-based call sites compiling unchanged. Interior mutability
+//! (`Arc<Mutex<Engine>>`) lets every method keep the legacy `&self` receiver
+//! even though tfdb writes need `&mut Engine`.
 //!
 //! Storage conventions mirrored from `db.rs`:
 //! - JSON columns (tags, topic_categories, rationale, components, topics,
@@ -14,20 +16,29 @@
 //! - Composite keys (keyword_rankings, edges, channel_snapshots, video_tags,
 //!   competitor_tags) are folded into a single tfdb pk column.
 //!
-//! Interior mutability (`RefCell<Engine>`) lets every method keep the legacy
+//! Interior mutability (`Arc<Mutex<Engine>>`) lets every method keep the legacy
 //! `&self` receiver even though tfdb writes need `&mut Engine`.
 
-use std::cell::RefCell;
+// tfdb is synchronous; the async methods here only exist to keep the legacy
+// `.await`-based call sites compiling unchanged. None of them await internally.
+#![allow(clippy::unused_async)]
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use crate::error::TubeforgeError;
 use crate::storage::schema::SCHEMA_VERSION;
 use crate::tfdb::store::{Engine, Row, Value};
 
 /// A live tfdb-backed database connection.
+///
+/// The engine lives behind `Arc<Mutex<Engine>>` so a `Db` is `Send + Sync`
+/// and cheaply `Clone` — the serve layer shares one `Db` across `tokio::spawn`
+/// tasks, and a clone is a second handle to the same in-memory engine.
+#[derive(Clone)]
 pub struct Db {
-    pub engine: RefCell<Engine>,
+    pub engine: Arc<Mutex<Engine>>,
     pub path: PathBuf,
 }
 
@@ -208,6 +219,30 @@ pub struct KeywordResearchRow {
     pub actively_published: bool,
     pub suggested_tags: String,
     pub related_keywords: String,
+}
+
+/// A raw row of the `kg_entities` table (used by the KG builder/loader).
+#[derive(Debug, Clone, Default)]
+pub struct KgEntityRow {
+    pub entity_id: String,
+    pub entity_type: String,
+    pub canonical_name: String,
+    pub display_name: String,
+    pub properties: String,
+    pub centrality: Option<f64>,
+    pub community_id: Option<i64>,
+    pub source: String,
+    pub source_ref: String,
+}
+
+/// A raw row of the `kg_relations` table (used by the KG builder/loader).
+#[derive(Debug, Clone)]
+pub struct KgRelationRow {
+    pub from_entity: String,
+    pub to_entity: String,
+    pub relation_type: String,
+    pub weight: f64,
+    pub source: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -529,45 +564,46 @@ fn keyword_research_from_row(r: &Row) -> KeywordResearchRow {
 impl Db {
     /// Open (creating if needed) the tfdb database at `path`, register every
     /// domain table, and record the schema version.
-    pub fn open(path: &Path) -> Result<Db, TubeforgeError> {
+    pub async fn open(path: &Path) -> Result<Db, TubeforgeError> {
         let mut engine = Engine::open(path)?;
         for schema in crate::tfdb::tfdb_schema::all() {
             engine.create_table(schema);
         }
         let db = Db {
-            engine: RefCell::new(engine),
+            engine: Arc::new(Mutex::new(engine)),
             path: path.to_path_buf(),
         };
-        db.meta_set("schema_version", &SCHEMA_VERSION.to_string())?;
+        db.meta_set("schema_version", &SCHEMA_VERSION.to_string()).await?;
         Ok(db)
     }
 
     /// Recorded schema version (meta "schema_version"), default 0.
-    pub fn user_version(&self) -> Result<i64, TubeforgeError> {
+    pub async fn user_version(&self) -> Result<i64, TubeforgeError> {
         let v = self
-            .meta_get("schema_version")?
+            .meta_get("schema_version").await?
             .and_then(|s| s.parse::<i64>().ok())
             .unwrap_or(0);
         Ok(v)
     }
 
     /// tfdb has no journal; report WAL for API parity.
-    pub fn journal_mode(&self) -> Result<String, TubeforgeError> {
+    pub async fn journal_mode(&self) -> Result<String, TubeforgeError> {
         Ok("wal".to_string())
     }
 
     /// No-op: tfdb is crash-safe by construction (WAL + CRC + checkpoint).
-    pub fn integrity_check(&self) -> Result<(), TubeforgeError> {
+    pub async fn integrity_check(&self) -> Result<(), TubeforgeError> {
         Ok(())
     }
 
-    pub fn meta_get(&self, key: &str) -> Result<Option<String>, TubeforgeError> {
-        let eng = self.engine.borrow();
+    pub async fn meta_get(&self, key: &str) -> Result<Option<String>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         Ok(eng.get("meta", key)?.and_then(|r| opt_s(&r, "value")))
     }
 
-    pub fn meta_set(&self, key: &str, value: &str) -> Result<(), TubeforgeError> {
-        let mut eng = self.engine.borrow_mut();
+    pub async fn meta_set(&self, key: &str, value: &str) -> Result<(), TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
         let mut row = Row::new();
         row.insert("key".to_string(), v_text(key));
         row.insert("value".to_string(), v_text(value));
@@ -580,100 +616,123 @@ impl Db {
     /// Row count helper. The `sql` argument is legacy SQL; tfdb has no SQL, so
     /// we only parse the `FROM <table>` clause and count that table (the exact
     /// callers in health/scorecard use plain `SELECT count(*) FROM <table>`).
-    pub fn count(&self, sql: &str) -> Result<i64, TubeforgeError> {
-        let eng = self.engine.borrow();
+    pub async fn count(&self, sql: &str) -> Result<i64, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         let table = extract_from_table(sql);
-        let n = match table.as_deref() {
-            Some(t) if eng.table_exists(t) => eng.count(t).unwrap_or(0) as i64,
-            _ => 0,
+        let Some(t) = table else {
+            return Ok(0);
         };
-        Ok(n)
+        if !eng.table_exists(&t) {
+            return Ok(0);
+        }
+        // Apply a simple `WHERE col = 'value'` filter when present (the only
+        // filtered count() callers use equality on a single column).
+        if let Some((col, val)) = extract_where_eq(sql) {
+            let rows = eng.find_eq(&t, &col, &Value::Text(val))?;
+            return Ok(rows.len() as i64);
+        }
+        Ok(eng.count(&t).unwrap_or(0) as i64)
     }
 
-    pub fn table_exists(&self, table: &str) -> Result<bool, TubeforgeError> {
-        Ok(self.engine.borrow().table_exists(table))
+    pub async fn table_exists(&self, table: &str) -> Result<bool, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
+        Ok(eng.table_exists(table))
     }
 
     // -- repository reads --------------------------------------------------
 
-    pub fn get_channel(&self, id: &str) -> Result<Option<ChannelRow>, TubeforgeError> {
-        let eng = self.engine.borrow();
+    pub async fn get_channel(&self, id: &str) -> Result<Option<ChannelRow>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         Ok(eng.get("channels", id)?.map(|r| channel_from_row(&r)))
     }
 
-    pub fn get_channel_by_handle(
+    pub async fn get_channel_by_handle(
         &self,
         handle: &str,
     ) -> Result<Option<ChannelRow>, TubeforgeError> {
-        let eng = self.engine.borrow();
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         Ok(eng
             .find_eq("channels", "handle", &Value::Text(handle.to_string()))?
             .first()
             .map(channel_from_row))
     }
 
-    pub fn get_video(&self, id: &str) -> Result<Option<VideoRow>, TubeforgeError> {
-        let eng = self.engine.borrow();
+    pub async fn get_video(&self, id: &str) -> Result<Option<VideoRow>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         Ok(eng.get("videos", id)?.map(|r| video_from_row(&r)))
     }
 
-    pub fn all_channels(&self) -> Result<Vec<ChannelRow>, TubeforgeError> {
-        let eng = self.engine.borrow();
+    pub async fn all_channels(&self) -> Result<Vec<ChannelRow>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         let mut rows: Vec<ChannelRow> = eng.all("channels")?.iter().map(channel_from_row).collect();
         rows.sort_by(|a, b| a.channel_id.cmp(&b.channel_id));
         Ok(rows)
     }
 
-    pub fn all_videos(&self) -> Result<Vec<VideoRow>, TubeforgeError> {
-        let eng = self.engine.borrow();
+    pub async fn all_videos(&self) -> Result<Vec<VideoRow>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         let mut rows: Vec<VideoRow> = eng.all("videos")?.iter().map(video_from_row).collect();
         rows.sort_by(|a, b| a.video_id.cmp(&b.video_id));
         Ok(rows)
     }
 
-    pub fn get_score(&self, video_id: &str) -> Result<Option<ScoreRow>, TubeforgeError> {
-        let eng = self.engine.borrow();
+    pub async fn get_score(&self, video_id: &str) -> Result<Option<ScoreRow>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         Ok(eng.get("scores", video_id)?.map(|r| score_from_row(&r)))
     }
 
-    pub fn all_scores(&self) -> Result<Vec<ScoreRow>, TubeforgeError> {
-        let eng = self.engine.borrow();
+    pub async fn all_scores(&self) -> Result<Vec<ScoreRow>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         let mut rows: Vec<ScoreRow> = eng.all("scores")?.iter().map(score_from_row).collect();
         rows.sort_by(|a, b| b.total_score.total_cmp(&a.total_score));
         Ok(rows)
     }
 
-    pub fn list_keywords(&self) -> Result<Vec<KeywordRow>, TubeforgeError> {
-        let eng = self.engine.borrow();
+    pub async fn list_keywords(&self) -> Result<Vec<KeywordRow>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         let mut rows: Vec<KeywordRow> = eng.all("keywords")?.iter().map(keyword_from_row).collect();
         rows.sort_by(|a, b| a.keyword.cmp(&b.keyword));
         Ok(rows)
     }
 
-    pub fn list_rankings(&self) -> Result<Vec<RankingRow>, TubeforgeError> {
-        let eng = self.engine.borrow();
+    pub async fn list_rankings(&self) -> Result<Vec<RankingRow>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         let mut rows: Vec<RankingRow> =
             eng.all("keyword_rankings")?.iter().map(ranking_from_row).collect();
         rows.sort_by(|a, b| a.keyword.cmp(&b.keyword).then(a.checked_at.cmp(&b.checked_at)));
         Ok(rows)
     }
 
-    pub fn ranking_count_at(&self, checked_at: &str) -> Result<u64, TubeforgeError> {
-        let eng = self.engine.borrow();
+    pub async fn ranking_count_at(&self, checked_at: &str) -> Result<u64, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         Ok(eng
             .find_eq("keyword_rankings", "checked_at", &Value::Text(checked_at.to_string()))?
             .len() as u64)
     }
 
-    pub fn list_edges(&self) -> Result<Vec<EdgeRow>, TubeforgeError> {
-        let eng = self.engine.borrow();
+    pub async fn list_edges(&self) -> Result<Vec<EdgeRow>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         let mut rows: Vec<EdgeRow> = eng.all("edges")?.iter().map(edge_from_row).collect();
         rows.sort_by(|a, b| a.from_channel.cmp(&b.from_channel).then(a.to_channel.cmp(&b.to_channel)));
         Ok(rows)
     }
 
-    pub fn list_ideas(&self, status: Option<&str>, limit: usize) -> Result<Vec<IdeaRow>, TubeforgeError> {
-        let eng = self.engine.borrow();
+    pub async fn list_ideas(&self, status: Option<&str>, limit: usize) -> Result<Vec<IdeaRow>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         let mut items: Vec<(f64, i64, IdeaRow)> = eng
             .all("ideas")?
             .into_iter()
@@ -691,12 +750,13 @@ impl Db {
         Ok(items.into_iter().map(|(_, _, r)| r).collect())
     }
 
-    pub fn all_ideas(&self) -> Result<Vec<IdeaRow>, TubeforgeError> {
-        self.list_ideas(None, 0)
+    pub async fn all_ideas(&self) -> Result<Vec<IdeaRow>, TubeforgeError> {
+        self.list_ideas(None, 0).await
     }
 
-    pub fn list_alerts(&self, limit: usize) -> Result<Vec<AlertRow>, TubeforgeError> {
-        let eng = self.engine.borrow();
+    pub async fn list_alerts(&self, limit: usize) -> Result<Vec<AlertRow>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         let mut items: Vec<(String, i64, AlertRow)> = eng
             .all("alerts")?
             .into_iter()
@@ -712,18 +772,20 @@ impl Db {
         Ok(items.into_iter().map(|(_, _, r)| r).collect())
     }
 
-    pub fn alert_exists(
+    pub async fn alert_exists(
         &self,
         kind: &str,
         channel_id: Option<&str>,
         message: &str,
     ) -> Result<bool, TubeforgeError> {
-        let eng = self.engine.borrow();
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         Ok(alert_exists_engine(&eng, kind, channel_id, message))
     }
 
-    pub fn list_competitors(&self) -> Result<Vec<String>, TubeforgeError> {
-        let eng = self.engine.borrow();
+    pub async fn list_competitors(&self) -> Result<Vec<String>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         let mut rows: Vec<(String, String)> = eng
             .all("competitors")?
             .into_iter()
@@ -733,8 +795,9 @@ impl Db {
         Ok(rows.into_iter().map(|(_, id)| id).collect())
     }
 
-    pub fn last_ingest(&self) -> Result<Option<IngestLogRow>, TubeforgeError> {
-        let eng = self.engine.borrow();
+    pub async fn last_ingest(&self) -> Result<Option<IngestLogRow>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         let mut items: Vec<(String, i64)> = eng
             .all("ingest_log")?
             .into_iter()
@@ -749,12 +812,13 @@ impl Db {
         Ok(row.map(|r| ingest_log_from_row(&r)))
     }
 
-    pub fn count_tags(&self) -> Result<i64, TubeforgeError> {
-        Ok(self.engine.borrow().count("tags")? as i64)
+    pub async fn count_tags(&self) -> Result<i64, TubeforgeError> {
+        Ok(self.engine.lock().unwrap().count("tags")? as i64)
     }
 
-    pub fn kg_entity_count(&self) -> Result<usize, TubeforgeError> {
-        let eng = self.engine.borrow();
+    pub async fn kg_entity_count(&self) -> Result<usize, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         if eng.table_exists("kg_entities") {
             Ok(eng.count("kg_entities")? as usize)
         } else {
@@ -762,8 +826,9 @@ impl Db {
         }
     }
 
-    pub fn kg_relation_count(&self) -> Result<usize, TubeforgeError> {
-        let eng = self.engine.borrow();
+    pub async fn kg_relation_count(&self) -> Result<usize, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         if eng.table_exists("kg_relations") {
             Ok(eng.count("kg_relations")? as usize)
         } else {
@@ -771,8 +836,9 @@ impl Db {
         }
     }
 
-    pub fn kg_community_count(&self) -> Result<usize, TubeforgeError> {
-        let eng = self.engine.borrow();
+    pub async fn kg_community_count(&self) -> Result<usize, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         if eng.table_exists("kg_communities") {
             Ok(eng.count("kg_communities")? as usize)
         } else {
@@ -780,8 +846,9 @@ impl Db {
         }
     }
 
-    pub fn tag_cloud(&self) -> Result<Vec<(String, i64)>, TubeforgeError> {
-        let eng = self.engine.borrow();
+    pub async fn tag_cloud(&self) -> Result<Vec<(String, i64)>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         let tags: Vec<(i64, String)> = eng
             .all("tags")?
             .into_iter()
@@ -802,8 +869,9 @@ impl Db {
         Ok(out)
     }
 
-    pub fn tag_gaps(&self, own_channel_id: &str) -> Result<Vec<(String, i64, i64)>, TubeforgeError> {
-        let eng = self.engine.borrow();
+    pub async fn tag_gaps(&self, own_channel_id: &str) -> Result<Vec<(String, i64, i64)>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         let mut comp: HashMap<String, i64> = HashMap::new();
         for ct in eng.all("competitor_tags")? {
             if t(&ct, "channel_id") == own_channel_id {
@@ -851,8 +919,9 @@ impl Db {
         Ok(out)
     }
 
-    pub fn get_video_tags(&self, video_id: &str) -> Result<Vec<(String, i64, String)>, TubeforgeError> {
-        let eng = self.engine.borrow();
+    pub async fn get_video_tags(&self, video_id: &str) -> Result<Vec<(String, i64, String)>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         let mut out: Vec<(String, i64, String)> = Vec::new();
         for vt in eng.find_eq("video_tags", "video_id", &Value::Text(video_id.to_string()))? {
             let tid = i(&vt, "tag_id");
@@ -866,11 +935,12 @@ impl Db {
         Ok(out)
     }
 
-    pub fn get_competitor_tag_stats(
+    pub async fn get_competitor_tag_stats(
         &self,
         channel_id: &str,
     ) -> Result<Vec<(String, i64, i64)>, TubeforgeError> {
-        let eng = self.engine.borrow();
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         let mut rows: Vec<(String, i64, i64)> = eng
             .find_eq("competitor_tags", "channel_id", &Value::Text(channel_id.to_string()))?
             .into_iter()
@@ -881,21 +951,24 @@ impl Db {
         Ok(rows)
     }
 
-    pub fn get_transcript(&self, video_id: &str) -> Result<Option<TranscriptRow>, TubeforgeError> {
-        let eng = self.engine.borrow();
+    pub async fn get_transcript(&self, video_id: &str) -> Result<Option<TranscriptRow>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         Ok(eng.get("transcripts", video_id)?.map(|r| transcript_from_row(&r)))
     }
 
-    pub fn list_transcripts(&self) -> Result<Vec<TranscriptRow>, TubeforgeError> {
-        let eng = self.engine.borrow();
+    pub async fn list_transcripts(&self) -> Result<Vec<TranscriptRow>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         let mut rows: Vec<TranscriptRow> =
             eng.all("transcripts")?.iter().map(transcript_from_row).collect();
         rows.sort_by(|a, b| b.fetched_at.cmp(&a.fetched_at));
         Ok(rows)
     }
 
-    pub fn list_comments(&self, video_id: &str) -> Result<Vec<CommentRow>, TubeforgeError> {
-        let eng = self.engine.borrow();
+    pub async fn list_comments(&self, video_id: &str) -> Result<Vec<CommentRow>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         let mut rows: Vec<CommentRow> = eng
             .find_eq("comments", "video_id", &Value::Text(video_id.to_string()))?
             .iter()
@@ -905,8 +978,9 @@ impl Db {
         Ok(rows)
     }
 
-    pub fn get_heatmap(&self, video_id: &str) -> Result<String, TubeforgeError> {
-        let eng = self.engine.borrow();
+    pub async fn get_heatmap(&self, video_id: &str) -> Result<String, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         Ok(eng
             .get("video_heatmap", video_id)?
             .map(|r| json_s(&r, "points"))
@@ -914,11 +988,12 @@ impl Db {
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn channel_snapshots(
+    pub async fn channel_snapshots(
         &self,
         channel_id: &str,
     ) -> Result<Vec<(String, Option<i64>, Option<i64>, Option<i64>)>, TubeforgeError> {
-        let eng = self.engine.borrow();
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         let mut rows: Vec<(String, Option<i64>, Option<i64>, Option<i64>)> = eng
             .find_eq("channel_snapshots", "channel_id", &Value::Text(channel_id.to_string()))?
             .into_iter()
@@ -935,8 +1010,9 @@ impl Db {
         Ok(rows)
     }
 
-    pub fn channel_total_views(&self, channel_id: &str) -> Result<i64, TubeforgeError> {
-        let eng = self.engine.borrow();
+    pub async fn channel_total_views(&self, channel_id: &str) -> Result<i64, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         let mut total = 0i64;
         for v in eng.find_eq("videos", "channel_id", &Value::Text(channel_id.to_string()))? {
             total += i(&v, "view_count");
@@ -944,15 +1020,17 @@ impl Db {
         Ok(total)
     }
 
-    pub fn channel_video_count(&self, channel_id: &str) -> Result<i64, TubeforgeError> {
-        let eng = self.engine.borrow();
+    pub async fn channel_video_count(&self, channel_id: &str) -> Result<i64, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         Ok(eng
             .find_eq("videos", "channel_id", &Value::Text(channel_id.to_string()))?
             .len() as i64)
     }
 
-    pub fn keyword_research_history(&self, keyword: &str) -> Result<Vec<KeywordResearchRow>, TubeforgeError> {
-        let eng = self.engine.borrow();
+    pub async fn keyword_research_history(&self, keyword: &str) -> Result<Vec<KeywordResearchRow>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         let mut rows: Vec<KeywordResearchRow> = eng
             .find_eq("keyword_research", "keyword", &Value::Text(keyword.to_string()))?
             .iter()
@@ -962,16 +1040,18 @@ impl Db {
         Ok(rows)
     }
 
-    pub fn keyword_research_all(&self) -> Result<Vec<KeywordResearchRow>, TubeforgeError> {
-        let eng = self.engine.borrow();
+    pub async fn keyword_research_all(&self) -> Result<Vec<KeywordResearchRow>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         let mut rows: Vec<KeywordResearchRow> =
             eng.all("keyword_research")?.iter().map(keyword_research_from_row).collect();
         rows.sort_by(|a, b| a.keyword.cmp(&b.keyword).then(a.at.cmp(&b.at)));
         Ok(rows)
     }
 
-    pub fn keyword_trending(&self, limit: usize) -> Result<Vec<KeywordTrendingRow>, TubeforgeError> {
-        let eng = self.engine.borrow();
+    pub async fn keyword_trending(&self, limit: usize) -> Result<Vec<KeywordTrendingRow>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
         let mut latest: HashMap<String, String> = HashMap::new();
         for r in eng.all("keyword_research")? {
             let kw = t(&r, "keyword");
@@ -1004,16 +1084,16 @@ impl Db {
         Ok(out)
     }
 
-    // -- repository writes (all keep the legacy `&self` receiver via RefCell) --
+    // -- repository writes (all keep the legacy `&self` receiver via Mutex) --
 
-    pub fn insert_alert(
+    pub async fn insert_alert(
         &self,
         kind: &str,
         channel_id: Option<&str>,
         message: &str,
         severity: &str,
     ) -> Result<usize, TubeforgeError> {
-        let mut eng = self.engine.borrow_mut();
+        let mut eng = self.engine.lock().unwrap();
         if alert_exists_engine(&eng, kind, channel_id, message) {
             return Ok(0);
         }
@@ -1032,7 +1112,7 @@ impl Db {
         Ok(1)
     }
 
-    pub fn upsert_score(
+    pub async fn upsert_score(
         &self,
         video_id: &str,
         seo: f64,
@@ -1040,7 +1120,7 @@ impl Db {
         total: f64,
         components: &str,
     ) -> Result<(), TubeforgeError> {
-        let mut eng = self.engine.borrow_mut();
+        let mut eng = self.engine.lock().unwrap();
         let mut row = Row::new();
         row.insert("video_id".to_string(), v_text(video_id));
         row.insert("seo_score".to_string(), Value::Float(seo));
@@ -1054,9 +1134,9 @@ impl Db {
         Ok(())
     }
 
-    pub fn add_keywords(&self, keywords: &[String], niche: Option<&str>) -> Result<usize, TubeforgeError> {
+    pub async fn add_keywords(&self, keywords: &[String], niche: Option<&str>) -> Result<usize, TubeforgeError> {
         let at = crate::util::now_rfc3339();
-        let mut eng = self.engine.borrow_mut();
+        let mut eng = self.engine.lock().unwrap();
         let mut to_add: Vec<Row> = Vec::new();
         let mut pending: HashMap<String, ()> = HashMap::new();
         let mut added = 0;
@@ -1084,7 +1164,7 @@ impl Db {
         Ok(added)
     }
 
-    pub fn upsert_ranking(
+    pub async fn upsert_ranking(
         &self,
         keyword: &str,
         checked_at: &str,
@@ -1092,7 +1172,7 @@ impl Db {
         position: Option<i64>,
         topics: Option<&str>,
     ) -> Result<(), TubeforgeError> {
-        let mut eng = self.engine.borrow_mut();
+        let mut eng = self.engine.lock().unwrap();
         let pk = format!("{keyword}\x1f{checked_at}");
         let mut row = Row::new();
         row.insert("keyword_checked_at".to_string(), v_text(&pk));
@@ -1107,14 +1187,14 @@ impl Db {
         Ok(())
     }
 
-    pub fn upsert_edge(
+    pub async fn upsert_edge(
         &self,
         from_channel: &str,
         to_channel: &str,
         weight: f64,
         source: &str,
     ) -> Result<(), TubeforgeError> {
-        let mut eng = self.engine.borrow_mut();
+        let mut eng = self.engine.lock().unwrap();
         let pk = format!("{from_channel}\x1f{to_channel}");
         let existing = eng.get("edges", &pk)?;
         if let Some(ex) = &existing {
@@ -1134,8 +1214,8 @@ impl Db {
         Ok(())
     }
 
-    pub fn delete_overlap_edges(&self) -> Result<usize, TubeforgeError> {
-        let mut eng = self.engine.borrow_mut();
+    pub async fn delete_overlap_edges(&self) -> Result<usize, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
         let pks: Vec<String> = eng
             .all("edges")?
             .into_iter()
@@ -1150,7 +1230,7 @@ impl Db {
         Ok(pks.len())
     }
 
-    pub fn upsert_idea(
+    pub async fn upsert_idea(
         &self,
         title_suggestion: &str,
         rationale: &str,
@@ -1159,7 +1239,7 @@ impl Db {
         source_video: Option<&str>,
     ) -> Result<i64, TubeforgeError> {
         let at = crate::util::now_rfc3339();
-        let mut eng = self.engine.borrow_mut();
+        let mut eng = self.engine.lock().unwrap();
         let mut existing_id: Option<i64> = None;
         for r in eng.all("ideas")? {
             if t(&r, "title_suggestion") == title_suggestion
@@ -1187,12 +1267,12 @@ impl Db {
         Ok(id)
     }
 
-    pub fn set_privacy_status(
+    pub async fn set_privacy_status(
         &self,
         video_id: &str,
         privacy_status: Option<&str>,
     ) -> Result<(), TubeforgeError> {
-        let mut eng = self.engine.borrow_mut();
+        let mut eng = self.engine.lock().unwrap();
         let Some(mut row) = eng.get("videos", video_id)? else {
             return Ok(());
         };
@@ -1204,8 +1284,8 @@ impl Db {
         Ok(())
     }
 
-    pub fn set_idea_statuses(&self, ids: &[i64], status: &str) -> Result<usize, TubeforgeError> {
-        let mut eng = self.engine.borrow_mut();
+    pub async fn set_idea_statuses(&self, ids: &[i64], status: &str) -> Result<usize, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
         let mut to_write: Vec<Row> = Vec::new();
         let mut marked = 0;
         for id in ids {
@@ -1223,8 +1303,8 @@ impl Db {
         Ok(marked)
     }
 
-    pub fn mark_alerts_read(&self) -> Result<usize, TubeforgeError> {
-        let mut eng = self.engine.borrow_mut();
+    pub async fn mark_alerts_read(&self) -> Result<usize, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
         let now = crate::util::now_rfc3339();
         let mut to_write: Vec<Row> = Vec::new();
         let mut marked = 0;
@@ -1244,8 +1324,8 @@ impl Db {
         Ok(marked)
     }
 
-    pub fn clear_alerts(&self) -> Result<usize, TubeforgeError> {
-        let mut eng = self.engine.borrow_mut();
+    pub async fn clear_alerts(&self) -> Result<usize, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
         let pks: Vec<String> = eng
             .all("alerts")?
             .into_iter()
@@ -1259,9 +1339,9 @@ impl Db {
         Ok(pks.len())
     }
 
-    pub fn register_competitors(&self, channel_ids: &[String], label: &str) -> Result<usize, TubeforgeError> {
+    pub async fn register_competitors(&self, channel_ids: &[String], label: &str) -> Result<usize, TubeforgeError> {
         let now = crate::util::now_rfc3339();
-        let mut eng = self.engine.borrow_mut();
+        let mut eng = self.engine.lock().unwrap();
         let mut to_add: Vec<Row> = Vec::new();
         let mut added = 0;
         for cid in channel_ids {
@@ -1287,8 +1367,8 @@ impl Db {
         Ok(added)
     }
 
-    pub fn upsert_tags(&self, video_id: &str, tag_names: &[String], source: &str) -> Result<(), TubeforgeError> {
-        let mut eng = self.engine.borrow_mut();
+    pub async fn upsert_tags(&self, video_id: &str, tag_names: &[String], source: &str) -> Result<(), TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
         let mut writes: Vec<Row> = Vec::new();
         for (pos, name) in tag_names.iter().enumerate() {
             let name = name.trim();
@@ -1315,7 +1395,7 @@ impl Db {
         Ok(())
     }
 
-    pub fn upsert_competitor_tags(
+    pub async fn upsert_competitor_tags(
         &self,
         channel_id: &str,
         tag_name: &str,
@@ -1323,7 +1403,7 @@ impl Db {
         avg_views: f64,
         rank: Option<i64>,
     ) -> Result<(), TubeforgeError> {
-        let mut eng = self.engine.borrow_mut();
+        let mut eng = self.engine.lock().unwrap();
         let pk = format!("{channel_id}\x1f{tag_name}");
         let mut row = Row::new();
         row.insert("channel_tag".to_string(), v_text(&pk));
@@ -1338,7 +1418,7 @@ impl Db {
         Ok(())
     }
 
-    pub fn upsert_transcript(
+    pub async fn upsert_transcript(
         &self,
         video_id: &str,
         lang: &str,
@@ -1347,7 +1427,7 @@ impl Db {
         now: &str,
     ) -> Result<(), TubeforgeError> {
         let words = text.split_whitespace().count() as i64;
-        let mut eng = self.engine.borrow_mut();
+        let mut eng = self.engine.lock().unwrap();
         let mut row = Row::new();
         row.insert("video_id".to_string(), v_text(video_id));
         row.insert("lang".to_string(), v_text(lang));
@@ -1361,8 +1441,8 @@ impl Db {
         Ok(())
     }
 
-    pub fn clear_transcripts(&self) -> Result<(), TubeforgeError> {
-        let mut eng = self.engine.borrow_mut();
+    pub async fn clear_transcripts(&self) -> Result<(), TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
         let pks: Vec<String> = eng
             .all("transcripts")?
             .into_iter()
@@ -1376,13 +1456,13 @@ impl Db {
         Ok(())
     }
 
-    pub fn upsert_comments(
+    pub async fn upsert_comments(
         &self,
         video_id: &str,
         comments: &[CommentRow],
         now: &str,
     ) -> Result<usize, TubeforgeError> {
-        let mut eng = self.engine.borrow_mut();
+        let mut eng = self.engine.lock().unwrap();
         let mut tx = eng.begin();
         let mut n = 0;
         for c in comments {
@@ -1401,8 +1481,8 @@ impl Db {
         Ok(n)
     }
 
-    pub fn clear_comments(&self) -> Result<(), TubeforgeError> {
-        let mut eng = self.engine.borrow_mut();
+    pub async fn clear_comments(&self) -> Result<(), TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
         let pks: Vec<String> = eng
             .all("comments")?
             .into_iter()
@@ -1416,8 +1496,8 @@ impl Db {
         Ok(())
     }
 
-    pub fn upsert_heatmap(&self, video_id: &str, points_json: &str, now: &str) -> Result<(), TubeforgeError> {
-        let mut eng = self.engine.borrow_mut();
+    pub async fn upsert_heatmap(&self, video_id: &str, points_json: &str, now: &str) -> Result<(), TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
         let mut row = Row::new();
         row.insert("video_id".to_string(), v_text(video_id));
         row.insert("points".to_string(), v_json(points_json));
@@ -1428,7 +1508,7 @@ impl Db {
         Ok(())
     }
 
-    pub fn upsert_channel_snapshot(
+    pub async fn upsert_channel_snapshot(
         &self,
         channel_id: &str,
         at: &str,
@@ -1436,7 +1516,7 @@ impl Db {
         videos: Option<i64>,
         total_views: Option<i64>,
     ) -> Result<(), TubeforgeError> {
-        let mut eng = self.engine.borrow_mut();
+        let mut eng = self.engine.lock().unwrap();
         let pk = format!("{channel_id}\x1f{at}");
         let mut row = Row::new();
         row.insert("channel_at".to_string(), v_text(&pk));
@@ -1451,14 +1531,14 @@ impl Db {
         Ok(())
     }
 
-    pub fn upsert_channel_snapshot_daily(
+    pub async fn upsert_channel_snapshot_daily(
         &self,
         channel_id: &str,
         subscribers: Option<i64>,
         videos: Option<i64>,
         total_views: Option<i64>,
     ) -> Result<(), TubeforgeError> {
-        let mut eng = self.engine.borrow_mut();
+        let mut eng = self.engine.lock().unwrap();
         let now = crate::util::now_rfc3339();
         let day = now.chars().take(10).collect::<String>();
         let at = format!("{day}T00:00:00Z");
@@ -1481,7 +1561,7 @@ impl Db {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn upsert_keyword_research(
+    pub async fn upsert_keyword_research(
         &self,
         keyword: &str,
         at: &str,
@@ -1495,7 +1575,7 @@ impl Db {
         suggested_tags: &str,
         related_keywords: &str,
     ) -> Result<(), TubeforgeError> {
-        let mut eng = self.engine.borrow_mut();
+        let mut eng = self.engine.lock().unwrap();
         let id = next_id(&eng, "keyword_research", "research_id")?;
         let mut row = Row::new();
         row.insert("research_id".to_string(), Value::Int(id));
@@ -1517,8 +1597,323 @@ impl Db {
     }
 
     /// Begin the single batch write transaction.
-    pub fn begin_batch(&mut self) -> Result<Batch<'_>, TubeforgeError> {
+    pub async fn begin_batch(&mut self) -> Result<Batch<'_>, TubeforgeError> {
         Ok(Batch { db: self })
+    }
+
+    // -- legacy-parity / point-update helpers (callers migrated from turso) --
+
+    /// No-op migration: tfdb creates the full schema on open and records
+    /// `schema_version`, so there are no SQL migrations to run.
+    pub async fn migrate(&mut self) -> Result<(), TubeforgeError> {
+        Ok(())
+    }
+
+    /// Copy a consistent checkpoint of the engine to `dest` (the tfdb analog
+    /// of the legacy `VACUUM INTO` snapshot). Checkpoints the engine first so
+    /// the WAL is folded into the `.dat` file, then copies it. Because
+    /// `Db::open(dest)` loads `<dest>.dat`, the checkpoint is mirrored there
+    /// so a snapshot round-trips through `Db::open` (backup.rs's integrity
+    /// check) while `dest` itself is the standalone, prunable snapshot file.
+    pub async fn vacuum_into(&self, dest: &Path) -> Result<(), TubeforgeError> {
+        self.engine.lock().unwrap().checkpoint()?;
+        let dat = self.path.with_extension("dat");
+        std::fs::copy(&dat, dest).map_err(|e| TubeforgeError::Storage {
+            code: "IO".to_string(),
+            message: format!("copy checkpoint {} -> {}: {e}", dat.display(), dest.display()),
+        })?;
+        let dest_dat = dest.with_extension("dat");
+        std::fs::copy(&dat, &dest_dat).map_err(|e| TubeforgeError::Storage {
+            code: "IO".to_string(),
+            message: format!(
+                "copy checkpoint {} -> {}: {e}",
+                dat.display(),
+                dest_dat.display()
+            ),
+        })?;
+        Ok(())
+    }
+
+    /// Column names of a table (the tfdb analog of `PRAGMA table_info`).
+    pub async fn columns(&self, table: &str) -> Result<Vec<String>, TubeforgeError> {
+        Ok(crate::tfdb::tfdb_schema::all()
+            .into_iter()
+            .find(|s| s.name == table)
+            .map(|s| s.cols.iter().map(|c| c.name.clone()).collect())
+            .unwrap_or_default())
+    }
+
+    /// Coalesce-style refresh of a video's live stats (view/like/comment):
+    /// only non-None values overwrite the stored row.
+    pub async fn update_video_stats(
+        &self,
+        video_id: &str,
+        view_count: Option<i64>,
+        like_count: Option<i64>,
+        comment_count: Option<i64>,
+        updated_at: &str,
+    ) -> Result<(), TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        let Some(mut row) = eng.get("videos", video_id)? else {
+            return Ok(());
+        };
+        if view_count.is_some() {
+            row.insert("view_count".to_string(), v_int(view_count));
+        }
+        if like_count.is_some() {
+            row.insert("like_count".to_string(), v_int(like_count));
+        }
+        if comment_count.is_some() {
+            row.insert("comment_count".to_string(), v_int(comment_count));
+        }
+        row.insert("updated_at".to_string(), v_text(updated_at));
+        let mut tx = eng.begin();
+        tx.put("videos", row)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Refresh a channel's subscriber count and stamp `updated_at`.
+    pub async fn update_channel_subscribers(
+        &self,
+        channel_id: &str,
+        subscriber_count: i64,
+        updated_at: &str,
+    ) -> Result<(), TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        let Some(mut row) = eng.get("channels", channel_id)? else {
+            return Ok(());
+        };
+        row.insert("subscriber_count".to_string(), Value::Int(subscriber_count));
+        row.insert("updated_at".to_string(), v_text(updated_at));
+        let mut tx = eng.begin();
+        tx.put("channels", row)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Set a video's `tags` column (JSON string) and stamp `updated_at`.
+    pub async fn set_video_tags(
+        &self,
+        video_id: &str,
+        tags: &str,
+        updated_at: &str,
+    ) -> Result<(), TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        let Some(mut row) = eng.get("videos", video_id)? else {
+            return Ok(());
+        };
+        row.insert("tags".to_string(), v_json(tags));
+        row.insert("updated_at".to_string(), v_text(updated_at));
+        let mut tx = eng.begin();
+        tx.put("videos", row)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    // -- knowledge-graph persistence (kg_builder) -------------------------
+
+    /// Drop every row of the given KG tables (used for full/incremental
+    /// rebuild paths — `kg_communities` is always recomputed, so it is cleared
+    /// on both paths while entities/relations are only cleared on full).
+    pub async fn clear_kg(&self, tables: &[&str]) -> Result<(), TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        let mut to_delete: Vec<(String, String)> = Vec::new();
+        for table in tables {
+            let pk_col = crate::tfdb::tfdb_schema::all()
+                .into_iter()
+                .find(|s| s.name == *table)
+                .map(|s| s.pk)
+                .unwrap_or_default();
+            for row in eng.all(table)? {
+                let pk = match row.get(&pk_col) {
+                    Some(Value::Text(s)) => s.clone(),
+                    Some(Value::Int(n)) => n.to_string(),
+                    _ => continue,
+                };
+                to_delete.push((table.to_string(), pk));
+            }
+        }
+        let mut tx = eng.begin();
+        for (table, pk) in &to_delete {
+            tx.delete(table, pk)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// All `kg_entities` rows (for the in-memory KG loader).
+    pub async fn list_kg_entities(&self) -> Result<Vec<KgEntityRow>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
+        let mut rows: Vec<KgEntityRow> = eng
+            .all("kg_entities")?
+            .iter()
+            .map(|r| KgEntityRow {
+                entity_id: t(r, "entity_id"),
+                entity_type: t(r, "entity_type"),
+                canonical_name: t(r, "canonical_name"),
+                display_name: t(r, "display_name"),
+                properties: json_s(r, "properties"),
+                centrality: opt_f(r, "centrality"),
+                community_id: opt_i(r, "community_id"),
+                source: t(r, "source"),
+                source_ref: t(r, "source_ref"),
+            })
+            .collect();
+        rows.sort_by(|a, b| a.entity_id.cmp(&b.entity_id));
+        Ok(rows)
+    }
+
+    /// All `kg_relations` rows (for the in-memory KG loader).
+    pub async fn list_kg_relations(&self) -> Result<Vec<KgRelationRow>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
+        let mut rows: Vec<KgRelationRow> = eng
+            .all("kg_relations")?
+            .iter()
+            .map(|r| KgRelationRow {
+                from_entity: t(r, "from_entity"),
+                to_entity: t(r, "to_entity"),
+                relation_type: t(r, "relation_type"),
+                weight: f(r, "weight"),
+                source: t(r, "source"),
+            })
+            .collect();
+        rows.sort_by(|a, b| a.from_entity.cmp(&b.from_entity).then(a.to_entity.cmp(&b.to_entity)));
+        Ok(rows)
+    }
+
+    /// All `kg_communities` ids (for the in-memory KG loader).
+    pub async fn list_kg_communities(&self) -> Result<Vec<i64>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
+        let mut ids: Vec<i64> = eng
+            .all("kg_communities")?
+            .into_iter()
+            .filter_map(|r| r.get("community_id").and_then(|v| v.as_i64()))
+            .collect();
+        ids.sort_unstable();
+        Ok(ids)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn persist_kg_entity(
+        &self,
+        entity_id: &str,
+        entity_type: &str,
+        canonical_name: &str,
+        display_name: &str,
+        properties_json: &str,
+        centrality: Option<f64>,
+        community_id: Option<i64>,
+        source: &str,
+        source_ref: &str,
+    ) -> Result<(), TubeforgeError> {
+        let now = crate::util::now_rfc3339();
+        let mut eng = self.engine.lock().unwrap();
+        let mut row = Row::new();
+        row.insert("entity_id".to_string(), v_text(entity_id));
+        row.insert("entity_type".to_string(), v_text(entity_type));
+        row.insert("canonical_name".to_string(), v_text(canonical_name));
+        row.insert("display_name".to_string(), v_text(display_name));
+        row.insert("properties".to_string(), v_json(properties_json));
+        row.insert("centrality".to_string(), v_float(centrality));
+        row.insert("community_id".to_string(), v_int(community_id));
+        row.insert("source".to_string(), v_text(source));
+        row.insert("source_ref".to_string(), v_text(source_ref));
+        row.insert("created_at".to_string(), v_text(&now));
+        row.insert("updated_at".to_string(), v_text(&now));
+        let mut tx = eng.begin();
+        tx.put("kg_entities", row)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Insert-or-replace one `kg_relations` row (dedup key: from/to/type).
+    pub async fn persist_kg_relation(
+        &self,
+        from_entity: &str,
+        to_entity: &str,
+        relation_type: &str,
+        weight: f64,
+        source: &str,
+    ) -> Result<(), TubeforgeError> {
+        let now = crate::util::now_rfc3339();
+        let mut eng = self.engine.lock().unwrap();
+        let pk = format!("{from_entity}\x1f{to_entity}\x1f{relation_type}");
+        let mut row = Row::new();
+        row.insert("relation_id".to_string(), v_text(&pk));
+        row.insert("from_entity".to_string(), v_text(from_entity));
+        row.insert("to_entity".to_string(), v_text(to_entity));
+        row.insert("relation_type".to_string(), v_text(relation_type));
+        row.insert("weight".to_string(), Value::Float(weight));
+        row.insert("source".to_string(), v_text(source));
+        row.insert("created_at".to_string(), v_text(&now));
+        let mut tx = eng.begin();
+        tx.put("kg_relations", row)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Insert-or-replace one `kg_communities` row.
+    pub async fn persist_kg_community(
+        &self,
+        community_id: i64,
+        member_count: i64,
+        top_entities_json: &str,
+    ) -> Result<(), TubeforgeError> {
+        let now = crate::util::now_rfc3339();
+        let mut eng = self.engine.lock().unwrap();
+        let mut row = Row::new();
+        row.insert("community_id".to_string(), Value::Int(community_id));
+        row.insert("community_type".to_string(), v_text("mixed"));
+        row.insert("member_count".to_string(), Value::Int(member_count));
+        row.insert("top_entities".to_string(), v_json(top_entities_json));
+        row.insert("created_at".to_string(), v_text(&now));
+        row.insert("updated_at".to_string(), v_text(&now));
+        let mut tx = eng.begin();
+        tx.put("kg_communities", row)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Point `kg_entities.community_id` for one entity.
+    pub async fn update_entity_community(
+        &self,
+        entity_id: &str,
+        community_id: i64,
+    ) -> Result<(), TubeforgeError> {
+        let now = crate::util::now_rfc3339();
+        let mut eng = self.engine.lock().unwrap();
+        let Some(mut row) = eng.get("kg_entities", entity_id)? else {
+            return Ok(());
+        };
+        row.insert("community_id".to_string(), Value::Int(community_id));
+        row.insert("updated_at".to_string(), v_text(&now));
+        let mut tx = eng.begin();
+        tx.put("kg_entities", row)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Point `kg_entities.centrality` for one entity.
+    pub async fn update_entity_centrality(
+        &self,
+        entity_id: &str,
+        centrality: f64,
+    ) -> Result<(), TubeforgeError> {
+        let now = crate::util::now_rfc3339();
+        let mut eng = self.engine.lock().unwrap();
+        let Some(mut row) = eng.get("kg_entities", entity_id)? else {
+            return Ok(());
+        };
+        row.insert("centrality".to_string(), Value::Float(centrality));
+        row.insert("updated_at".to_string(), v_text(&now));
+        let mut tx = eng.begin();
+        tx.put("kg_entities", row)?;
+        tx.commit()?;
+        Ok(())
     }
 }
 
@@ -1531,24 +1926,24 @@ pub struct Batch<'a> {
 }
 
 impl Batch<'_> {
-    pub fn upsert_channel(&mut self, c: &ChannelRow) -> Result<(), TubeforgeError> {
-        let mut eng = self.db.engine.borrow_mut();
+    pub async fn upsert_channel(&mut self, c: &ChannelRow) -> Result<(), TubeforgeError> {
+        let mut eng = self.db.engine.lock().unwrap();
         let mut tx = eng.begin();
         tx.put("channels", channel_to_row(c))?;
         tx.commit()?;
         Ok(())
     }
 
-    pub fn upsert_video(&mut self, v: &VideoRow) -> Result<(), TubeforgeError> {
-        let mut eng = self.db.engine.borrow_mut();
+    pub async fn upsert_video(&mut self, v: &VideoRow) -> Result<(), TubeforgeError> {
+        let mut eng = self.db.engine.lock().unwrap();
         let mut tx = eng.begin();
         tx.put("videos", video_to_row(v))?;
         tx.commit()?;
         Ok(())
     }
 
-    pub fn merge_channel(&mut self, old_id: &str, new_id: &str) -> Result<(), TubeforgeError> {
-        let mut eng = self.db.engine.borrow_mut();
+    pub async fn merge_channel(&mut self, old_id: &str, new_id: &str) -> Result<(), TubeforgeError> {
+        let mut eng = self.db.engine.lock().unwrap();
         let videos = eng.find_eq("videos", "channel_id", &Value::Text(old_id.to_string()))?;
         let comp_old = eng.get("competitors", old_id)?;
         let comp_new = eng.get("competitors", new_id)?;
@@ -1606,14 +2001,14 @@ impl Batch<'_> {
         Ok(())
     }
 
-    pub fn log_ingest(
+    pub async fn log_ingest(
         &mut self,
         batch_id: &str,
         item: &str,
         status: &str,
         detail: Option<&str>,
     ) -> Result<(), TubeforgeError> {
-        let mut eng = self.db.engine.borrow_mut();
+        let mut eng = self.db.engine.lock().unwrap();
         let id = next_id(&eng, "ingest_log", "log_id")?;
         let mut row = Row::new();
         row.insert("log_id".to_string(), Value::Int(id));
@@ -1628,7 +2023,7 @@ impl Batch<'_> {
         Ok(())
     }
 
-    pub fn commit(self) -> Result<(), TubeforgeError> {
+    pub async fn commit(self) -> Result<(), TubeforgeError> {
         Ok(())
     }
 }
@@ -1651,6 +2046,25 @@ fn extract_from_table(sql: &str) -> Option<String> {
     } else {
         Some(word)
     }
+}
+
+/// Extract a simple `WHERE <col> = '<value>'` clause (single-column equality),
+/// used by the filtered `count()` calls. Returns (col, value) without quotes.
+fn extract_where_eq(sql: &str) -> Option<(String, String)> {
+    let lower = sql.to_ascii_lowercase();
+    let idx = lower.find("where")?;
+    let clause = lower[idx + 5..].trim();
+    let eq = clause.find('=')?;
+    let col = clause[..eq].trim().to_string();
+    if col.is_empty() || !col.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    let val = clause[eq + 1..].trim();
+    let val = val.trim_matches('\'').trim_matches('"').to_string();
+    if val.is_empty() {
+        return None;
+    }
+    Some((col, val))
 }
 
 fn alert_exists_engine(eng: &Engine, kind: &str, channel_id: Option<&str>, message: &str) -> bool {
@@ -1682,12 +2096,12 @@ fn ensure_tag(eng: &mut Engine, name: &str) -> Result<i64, TubeforgeError> {
 
 /// Persist SERP videos (with their real tags) into the local DB. Free function
 /// mirroring `db.rs::persist_serp_db` (called from `research::inspect`).
-pub fn persist_serp_db(
+pub async fn persist_serp_db(
     db: &Db,
     results: &[crate::analytics::research::SerpResult],
 ) -> Result<(), TubeforgeError> {
     let now = crate::util::now_rfc3339();
-    let mut eng = db.engine.borrow_mut();
+    let mut eng = db.engine.lock().unwrap();
 
     let mut channel_rows: Vec<Row> = Vec::new();
     let mut video_rows: Vec<Row> = Vec::new();
@@ -1795,8 +2209,8 @@ pub fn persist_serp_db(
 
 /// Collapse duplicate videos: rows sharing (channel_id, title) merge into one
 /// record, keeping the richest row. Returns (merged_groups, deleted_rows).
-pub fn dedupe_videos(db: &Db) -> Result<(usize, usize), TubeforgeError> {
-    let mut eng = db.engine.borrow_mut();
+pub async fn dedupe_videos(db: &Db) -> Result<(usize, usize), TubeforgeError> {
+    let mut eng = db.engine.lock().unwrap();
     let videos: Vec<VideoRow> = eng.all("videos")?.iter().map(video_from_row).collect();
 
     let mut groups: HashMap<(String, String), Vec<&VideoRow>> = HashMap::new();
@@ -1887,9 +2301,13 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
+    fn block_on<F: std::future::Future>(f: F) -> F::Output {
+        tokio::runtime::Runtime::new().expect("rt").block_on(f)
+    }
+
     fn open_test() -> (tempfile::TempDir, Db) {
         let dir = tempfile::tempdir().expect("tempdir");
-        let db = Db::open(&dir.path().join("t.db")).expect("open");
+        let db = block_on(Db::open(&dir.path().join("t.db"))).expect("open");
         (dir, db)
     }
 
@@ -1899,8 +2317,8 @@ mod tests {
             keywords in proptest::collection::vec("[a-zA-Z0-9 ]{0,20}", 0..50),
         ) {
             let (_d, db) = open_test();
-            let added = db.add_keywords(&keywords, Some("test")).unwrap();
-            let listed = db.list_keywords().unwrap();
+            let added = block_on(db.add_keywords(&keywords, Some("test"))).unwrap();
+            let listed = block_on(db.list_keywords()).unwrap();
 
             let mut expected: Vec<String> = keywords
                 .iter()
@@ -1925,10 +2343,10 @@ mod tests {
             keywords in proptest::collection::vec("[a-zA-Z ]{0,10}", 1..30),
         ) {
             let (_d, db) = open_test();
-            db.add_keywords(&keywords, None).unwrap();
-            db.add_keywords(&keywords, None).unwrap();
+            block_on(db.add_keywords(&keywords, None)).unwrap();
+            block_on(db.add_keywords(&keywords, None)).unwrap();
 
-            let listed = db.list_keywords().unwrap();
+            let listed = block_on(db.list_keywords()).unwrap();
             let mut names: Vec<String> = listed.iter().map(|k| k.keyword.clone()).collect();
             names.sort();
             let before = names.len();
@@ -1949,40 +2367,40 @@ mod tests {
     #[test]
     fn upsert_score_roundtrip() {
         let (_d, db) = open_test();
-        db.upsert_score("v1", 0.5, 0.25, 0.75, "{\"seo\":1}").unwrap();
-        let s = db.get_score("v1").unwrap().expect("score present");
+        block_on(db.upsert_score("v1", 0.5, 0.25, 0.75, "{\"seo\":1}")).unwrap();
+        let s = block_on(db.get_score("v1")).unwrap().expect("score present");
         assert_eq!(s.video_id, "v1");
         assert_eq!(s.seo_score, 0.5);
         assert_eq!(s.geo_score, 0.25);
         assert_eq!(s.total_score, 0.75);
 
-        db.upsert_score("v1", 0.9, 0.1, 1.0, "{}").unwrap();
-        let s2 = db.get_score("v1").unwrap().unwrap();
+        block_on(db.upsert_score("v1", 0.9, 0.1, 1.0, "{}")).unwrap();
+        let s2 = block_on(db.get_score("v1")).unwrap().unwrap();
         assert_eq!(s2.total_score, 1.0);
-        assert!(db.get_score("missing").unwrap().is_none());
+        assert!(block_on(db.get_score("missing")).unwrap().is_none());
     }
 
     #[test]
     fn meta_roundtrip() {
         let (_d, db) = open_test();
-        assert_eq!(db.meta_get("nope").unwrap(), None);
-        db.meta_set("foo", "bar").unwrap();
-        assert_eq!(db.meta_get("foo").unwrap(), Some("bar".to_string()));
-        db.meta_set("foo", "baz").unwrap();
-        assert_eq!(db.meta_get("foo").unwrap(), Some("baz".to_string()));
-        assert_eq!(db.user_version().unwrap(), SCHEMA_VERSION);
+        assert_eq!(block_on(db.meta_get("nope")).unwrap(), None);
+        block_on(db.meta_set("foo", "bar")).unwrap();
+        assert_eq!(block_on(db.meta_get("foo")).unwrap(), Some("bar".to_string()));
+        block_on(db.meta_set("foo", "baz")).unwrap();
+        assert_eq!(block_on(db.meta_get("foo")).unwrap(), Some("baz".to_string()));
+        assert_eq!(block_on(db.user_version()).unwrap(), SCHEMA_VERSION);
     }
 
     #[test]
     fn ranking_ordered_by_keyword_then_checked_at() {
         let (_d, db) = open_test();
-        db.upsert_ranking("beta", "2026-01-01", Some("v1"), Some(1), None).unwrap();
-        db.upsert_ranking("alpha", "2026-01-02", None, None, None).unwrap();
-        db.upsert_ranking("alpha", "2026-01-01", Some("v2"), Some(2), None).unwrap();
+        block_on(db.upsert_ranking("beta", "2026-01-01", Some("v1"), Some(1), None)).unwrap();
+        block_on(db.upsert_ranking("alpha", "2026-01-02", None, None, None)).unwrap();
+        block_on(db.upsert_ranking("alpha", "2026-01-01", Some("v2"), Some(2), None)).unwrap();
         // Overwrite the same (keyword, checked_at) pk.
-        db.upsert_ranking("alpha", "2026-01-01", Some("v3"), Some(3), None).unwrap();
+        block_on(db.upsert_ranking("alpha", "2026-01-01", Some("v3"), Some(3), None)).unwrap();
 
-        let rows = db.list_rankings().unwrap();
+        let rows = block_on(db.list_rankings()).unwrap();
         let keys: Vec<(String, String)> =
             rows.iter().map(|r| (r.keyword.clone(), r.checked_at.clone())).collect();
         assert_eq!(
@@ -1993,7 +2411,7 @@ mod tests {
                 ("beta".to_string(), "2026-01-01".to_string()),
             ]
         );
-        assert_eq!(db.ranking_count_at("2026-01-01").unwrap(), 2);
+        assert_eq!(block_on(db.ranking_count_at("2026-01-01")).unwrap(), 2);
         // Same-instant overwrite means only one row per (keyword, checked_at).
         assert_eq!(
             rows.iter().filter(|r| r.keyword == "alpha" && r.checked_at == "2026-01-01").count(),
@@ -2004,42 +2422,43 @@ mod tests {
     #[test]
     fn all_videos_ordered_by_id() {
         let (_d, mut db) = open_test();
-        let mut batch = db.begin_batch().unwrap();
+        let mut batch = block_on(db.begin_batch()).unwrap();
         for id in ["c", "a", "b"] {
             let v = VideoRow {
                 video_id: id.to_string(),
                 title: format!("video {id}"),
                 ..Default::default()
             };
-            batch.upsert_video(&v).unwrap();
+            block_on(batch.upsert_video(&v)).unwrap();
         }
-        batch.commit().unwrap();
+        block_on(batch.commit()).unwrap();
 
-        let ids: Vec<String> = db.all_videos().unwrap().into_iter().map(|v| v.video_id).collect();
+        let ids: Vec<String> =
+            block_on(db.all_videos()).unwrap().into_iter().map(|v| v.video_id).collect();
         assert_eq!(ids, vec!["a".to_string(), "b".to_string(), "c".to_string()]);
     }
 
     #[test]
     fn set_idea_statuses() {
         let (_d, db) = open_test();
-        let id1 = db.upsert_idea("idea a", "[]", 1.0, "draft", None).unwrap();
-        let id2 = db.upsert_idea("idea b", "[]", 2.0, "draft", None).unwrap();
+        let id1 = block_on(db.upsert_idea("idea a", "[]", 1.0, "draft", None)).unwrap();
+        let id2 = block_on(db.upsert_idea("idea b", "[]", 2.0, "draft", None)).unwrap();
 
-        let marked = db.set_idea_statuses(&[id1, id2], "saved").unwrap();
+        let marked = block_on(db.set_idea_statuses(&[id1, id2], "saved")).unwrap();
         assert_eq!(marked, 2);
-        let ideas = db.all_ideas().unwrap();
+        let ideas = block_on(db.all_ideas()).unwrap();
         assert!(ideas.iter().all(|i| i.status == "saved"));
-        assert_eq!(db.set_idea_statuses(&[999_999], "discarded").unwrap(), 0);
+        assert_eq!(block_on(db.set_idea_statuses(&[999_999], "discarded")).unwrap(), 0);
     }
 
     #[test]
     fn insert_alert_dedupes() {
         let (_d, db) = open_test();
-        assert_eq!(db.insert_alert("brand", Some("c1"), "msg", "info").unwrap(), 1);
-        assert_eq!(db.insert_alert("brand", Some("c1"), "msg", "info").unwrap(), 0);
-        assert_eq!(db.insert_alert("brand", Some("c2"), "msg", "info").unwrap(), 1);
-        assert_eq!(db.insert_alert("brand", None, "msg", "info").unwrap(), 1);
-        assert_eq!(db.insert_alert("brand", None, "msg", "info").unwrap(), 0);
-        assert_eq!(db.list_alerts(0).unwrap().len(), 3);
+        assert_eq!(block_on(db.insert_alert("brand", Some("c1"), "msg", "info")).unwrap(), 1);
+        assert_eq!(block_on(db.insert_alert("brand", Some("c1"), "msg", "info")).unwrap(), 0);
+        assert_eq!(block_on(db.insert_alert("brand", Some("c2"), "msg", "info")).unwrap(), 1);
+        assert_eq!(block_on(db.insert_alert("brand", None, "msg", "info")).unwrap(), 1);
+        assert_eq!(block_on(db.insert_alert("brand", None, "msg", "info")).unwrap(), 0);
+        assert_eq!(block_on(db.list_alerts(0)).unwrap().len(), 3);
     }
 }

@@ -878,3 +878,43 @@ mod tests {
         assert!(call(&router, Method::GET, "/hello/world/extra").await.contains("not_found"));
     }
 }
+
+#[cfg(test)]
+mod route_tests {
+    use super::*;
+
+    async fn legacy_page() -> Response {
+        "legacy-page".into_response()
+    }
+
+    #[tokio::test]
+    async fn multi_segment_route_matches() {
+        let router = Router::new()
+            .route("/legacy/keywords", get(legacy_page))
+            .route("/legacy/ideas/{id}/{status}", post(legacy_page));
+        let state = ServeState::new(());
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("http://x/legacy/keywords")
+            .body(full(hyper::body::Bytes::new()))
+            .expect("req");
+        let resp = router.serve(req, state).await;
+        let body = http_body_util::BodyExt::collect(resp.into_body()).await.unwrap().to_bytes();
+        assert_eq!(String::from_utf8_lossy(&body), "legacy-page", "route matched");
+    }
+
+    #[tokio::test]
+    async fn multi_segment_post_matches() {
+        let router = Router::new()
+            .route("/legacy/ideas/{id}/{status}", post(legacy_page));
+        let state = ServeState::new(());
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("http://x/legacy/ideas/1/saved")
+            .body(full(hyper::body::Bytes::new()))
+            .expect("req");
+        let resp = router.serve(req, state).await;
+        let body = http_body_util::BodyExt::collect(resp.into_body()).await.unwrap().to_bytes();
+        assert_eq!(String::from_utf8_lossy(&body), "legacy-page", "post matched");
+    }
+}

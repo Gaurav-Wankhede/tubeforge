@@ -20,75 +20,71 @@ fn test_config(dir: &Path) -> Config {
         youtube_api_key: Some("test-key".to_string()),
         quota_warn_at: 90,
         chromium_dir: dir.join("chromium"),
+        ytdlp_path: "yt-dlp".into(),
+        ytdlp_enabled: false,
+        ytdlp_client: None,
+        ytdlp_js_runtime: None,
+        own_channel: None,
     }
 }
 
 /// Seed every exportable table with deterministic rows (2 videos, 1 channel,
 /// 1 tracked keyword + 1 ranking, 1 idea, 1 alert, 1 score).
-async fn seed_export_data(db: &Db) {
+async fn seed_export_data(db: &mut Db) {
     let at = "2026-07-01T00:00:00Z";
-    db.conn
-        .execute(
-            "INSERT INTO channels (channel_id, handle, title, country, subscriber_count, \
-                                   video_count, source, fetched_at, updated_at) \
-             VALUES ('UCa1b2c3d4e5f6g7h8i9j0kLM', '@Fixture', 'Fixture Channel', 'US', \
-                     1000, 2, 'rss', ?1, ?1)",
-            [at],
-        )
-        .await
-        .expect("channel");
-    for (id, published) in [
-        ("bbb222ccc33", "2026-07-02T00:00:00Z"),
-        ("aaa111bbb22", "2026-07-01T00:00:00Z"),
-    ] {
-        db.conn
-            .execute(
-                "INSERT INTO videos (video_id, channel_id, title, description, tags, \
-                                     published_at, view_count, source, fetched_at, updated_at) \
-                 VALUES (?1, 'UCa1b2c3d4e5f6g7h8i9j0kLM', 'Video ' || ?1, 'desc', '[\"a\",\"b\"]', \
-                         ?2, 42, 'rss', ?3, ?3)",
-                turso::params!(id, published, at),
-            )
+    {
+        let mut batch = db.begin_batch().await.expect("batch");
+        batch
+            .upsert_channel(&tubeforge::storage::db::ChannelRow {
+                channel_id: "UCa1b2c3d4e5f6g7h8i9j0kLM".into(),
+                handle: Some("@Fixture".into()),
+                title: "Fixture Channel".into(),
+                country: Some("US".into()),
+                subscriber_count: Some(1000),
+                video_count: Some(2),
+                source: "rss".into(),
+                fetched_at: at.into(),
+                updated_at: at.into(),
+                ..Default::default()
+            })
             .await
-            .expect("video");
+            .expect("channel");
+        for (id, published) in [
+            ("bbb222ccc33", "2026-07-02T00:00:00Z"),
+            ("aaa111bbb22", "2026-07-01T00:00:00Z"),
+        ] {
+            batch
+                .upsert_video(&tubeforge::storage::db::VideoRow {
+                    video_id: id.into(),
+                    channel_id: Some("UCa1b2c3d4e5f6g7h8i9j0kLM".into()),
+                    title: format!("Video {id}"),
+                    description: "desc".into(),
+                    tags: r#"["a","b"]"#.into(),
+                    published_at: published.into(),
+                    view_count: Some(42),
+                    source: "rss".into(),
+                    fetched_at: at.into(),
+                    updated_at: at.into(),
+                    ..Default::default()
+                })
+                .await
+                .expect("video");
+        }
+        batch.commit().await.expect("commit");
     }
-    db.conn
-        .execute(
-            "INSERT INTO keywords (keyword, niche, created_at) VALUES ('rust', 'dev', ?1)",
-            [at],
-        )
+    db.add_keywords(&["rust".to_string()], Some("dev"))
         .await
         .expect("keyword");
-    db.conn
-        .execute(
-            "INSERT INTO keyword_rankings (keyword, checked_at, video_id, position) \
-             VALUES ('rust', ?1, 'aaa111bbb22', 1)",
-            [at],
-        )
+    db.upsert_ranking("rust", at, Some("aaa111bbb22"), Some(1), None)
         .await
         .expect("ranking");
-    db.conn
-        .execute(
-            "INSERT INTO ideas (title_suggestion, rationale, score, status, created_at) \
-             VALUES ('Idea One', '{}', 80.5, 'draft', ?1)",
-            [at],
-        )
+    db.upsert_idea("Idea One", "{}", 80.5, "draft", None)
         .await
         .expect("idea");
-    db.conn
-        .execute(
-            "INSERT INTO alerts (kind, message, severity, created_at) \
-             VALUES ('gap', 'test alert', 'warn', ?1)",
-            [at],
-        )
+    db.insert_alert("gap", None, "test alert", "warn")
         .await
         .expect("alert");
-    db.conn
-        .execute(
-            "INSERT INTO scores (video_id, seo_score, geo_score, total_score, components, computed_at) \
-             VALUES ('aaa111bbb22', 90.0, 80.0, 85.0, '{}', ?1)",
-            [at],
-        )
+    db.upsert_score("aaa111bbb22", 90.0, 80.0, 85.0, "{}")
         .await
         .expect("score");
 }
@@ -103,51 +99,76 @@ async fn p3_migration_003_privacy_column_and_version_gate() {
     let db_path = dir.path().join("m003.db");
 
     let db = Db::open(&db_path).await.expect("open 1");
-    assert_eq!(db.user_version().await.expect("version"), 3);
     assert_eq!(
-        db.meta_get("schema_version").await.expect("meta").as_deref(),
-        Some("3")
+        db.user_version().await.expect("version"),
+        tubeforge::storage::schema::SCHEMA_VERSION
+    );
+    assert_eq!(
+        db.meta_get("schema_version")
+            .await
+            .expect("meta")
+            .as_deref(),
+        Some(
+            tubeforge::storage::schema::SCHEMA_VERSION
+                .to_string()
+                .as_str()
+        )
     );
     // The new nullable column exists.
     let cols = table_cols(&db, "videos").await;
-    assert!(cols.contains(&"privacy_status".to_string()), "privacy_status missing");
+    assert!(
+        cols.contains(&"privacy_status".to_string()),
+        "privacy_status missing"
+    );
 
     // Reopen: the version gate keeps 003 from re-running (no duplicate-column
     // error — ALTER TABLE ADD COLUMN has no IF NOT EXISTS here).
     let db2 = Db::open(&db_path).await.expect("open 2");
-    assert_eq!(db2.user_version().await.expect("version"), 3);
-    assert!(table_cols(&db2, "videos").await.contains(&"privacy_status".to_string()));
-    // Column is nullable: a minimal insert still works.
-    db2.conn
-        .execute(
-            "INSERT INTO videos (video_id, title, published_at, fetched_at, updated_at) \
-             VALUES ('y1y1y1y1y1y', 't', '2026-01-01T00:00:00Z', 'a', 'a')",
-            (),
-        )
+    assert_eq!(
+        db2.user_version().await.expect("version"),
+        tubeforge::storage::schema::SCHEMA_VERSION
+    );
+    assert!(table_cols(&db2, "videos")
         .await
-        .expect("minimal insert");
-    // And a full VideoRow upsert through the repository carries it.
-    let mut v = db2.get_video("y1y1y1y1y1y").await.expect("get").expect("row");
-    v.privacy_status = Some("unlisted".to_string());
+        .contains(&"privacy_status".to_string()));
+    // Column is nullable: a minimal insert still works.
     let mut db2 = db2;
+    {
+        let mut batch = db2.begin_batch().await.expect("batch");
+        batch
+            .upsert_video(&tubeforge::storage::db::VideoRow {
+                video_id: "y1y1y1y1y1y".into(),
+                title: "t".into(),
+                published_at: "2026-01-01T00:00:00Z".into(),
+                fetched_at: "2026-01-01T00:00:00Z".into(),
+                updated_at: "2026-01-01T00:00:00Z".into(),
+                source: "rss".into(),
+                ..Default::default()
+            })
+            .await
+            .expect("minimal insert");
+        batch.commit().await.expect("commit");
+    }
+    // And a full VideoRow upsert through the repository carries it.
+    let mut v = db2
+        .get_video("y1y1y1y1y1y")
+        .await
+        .expect("get")
+        .expect("row");
+    v.privacy_status = Some("unlisted".to_string());
     let mut batch = db2.begin_batch().await.expect("batch");
     batch.upsert_video(&v).await.expect("upsert");
     batch.commit().await.expect("commit");
-    let back = db2.get_video("y1y1y1y1y1y").await.expect("get").expect("row");
+    let back = db2
+        .get_video("y1y1y1y1y1y")
+        .await
+        .expect("get")
+        .expect("row");
     assert_eq!(back.privacy_status.as_deref(), Some("unlisted"));
 }
 
 async fn table_cols(db: &Db, table: &str) -> Vec<String> {
-    let sql = format!("PRAGMA table_info({table})");
-    let mut stmt = db.conn.prepare(&sql).await.expect("pragma");
-    let mut rows = stmt.query(()).await.expect("pragma rows");
-    let mut out = Vec::new();
-    while let Some(row) = rows.next().await.expect("row") {
-        if let turso::Value::Text(t) = row.get_value(1).expect("name") {
-            out.push(t);
-        }
-    }
-    out
+    db.columns(table).await.expect("columns")
 }
 
 // ---------------------------------------------------------------------------
@@ -158,8 +179,8 @@ async fn table_cols(db: &Db, table: &str) -> Vec<String> {
 async fn p3_export_dir_files_and_manifest() {
     let dir = tempfile::tempdir().expect("tempdir");
     let cfg = test_config(dir.path());
-    let db = Db::open(&cfg.db_path).await.expect("open db");
-    seed_export_data(&db).await;
+    let mut db = Db::open(&cfg.db_path).await.expect("open db");
+    seed_export_data(&mut db).await;
 
     let out_dir = dir.path().join("export");
     let data = export::run(&cfg, &out_dir, ExportFormat::Dir)
@@ -170,8 +191,16 @@ async fn p3_export_dir_files_and_manifest() {
 
     // All 10 files exist.
     for f in [
-        "videos.csv", "channels.csv", "tags.csv", "keywords.csv", "keyword_rankings.csv",
-        "videos.json", "ideas.json", "alerts.json", "scores.json", "manifest.json",
+        "videos.csv",
+        "channels.csv",
+        "tags.csv",
+        "keywords.csv",
+        "keyword_rankings.csv",
+        "videos.json",
+        "ideas.json",
+        "alerts.json",
+        "scores.json",
+        "manifest.json",
     ] {
         assert!(out_dir.join(f).is_file(), "missing {f}");
     }
@@ -200,7 +229,10 @@ async fn p3_export_dir_files_and_manifest() {
     assert!(channels_csv.contains("UCa1b2c3d4e5f6g7h8i9j0kLM"));
     let tags_csv = std::fs::read_to_string(out_dir.join("tags.csv")).expect("read");
     assert!(tags_csv.starts_with("Tag,Video Count,First Used,Last Used\n"));
-    assert!(tags_csv.contains("a,2,"), "tag a on both videos: {tags_csv}");
+    assert!(
+        tags_csv.contains("a,2,"),
+        "tag a on both videos: {tags_csv}"
+    );
     let keywords_csv = std::fs::read_to_string(out_dir.join("keywords.csv")).expect("read");
     assert!(keywords_csv.starts_with("Keyword,Niche,Created At\n"));
     assert!(keywords_csv.contains("rust,dev,"));
@@ -211,7 +243,10 @@ async fn p3_export_dir_files_and_manifest() {
             .expect("videos.json");
     assert_eq!(videos_json["rows"].as_array().expect("array").len(), 2);
     assert_eq!(videos_json["rows"][0]["video_id"], "aaa111bbb22");
-    assert_eq!(videos_json["_manifest"]["schema_version"], 3);
+    assert_eq!(
+        videos_json["_manifest"]["schema_version"],
+        tubeforge::storage::schema::SCHEMA_VERSION
+    );
     let ideas_json: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(out_dir.join("ideas.json")).expect("read"))
             .expect("ideas.json");
@@ -226,11 +261,15 @@ async fn p3_export_dir_files_and_manifest() {
     assert_eq!(scores_json["rows"][0]["total_score"], 85.0);
 
     // manifest carries counts + schema_version.
-    let manifest: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(out_dir.join("manifest.json")).expect("read"))
-            .expect("manifest");
+    let manifest: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(out_dir.join("manifest.json")).expect("read"),
+    )
+    .expect("manifest");
     assert_eq!(manifest["format"], "tubeforge-export");
-    assert_eq!(manifest["schema_version"], 3);
+    assert_eq!(
+        manifest["schema_version"],
+        tubeforge::storage::schema::SCHEMA_VERSION
+    );
     assert_eq!(manifest["counts"]["videos"], 2);
     assert_eq!(manifest["counts"]["channels"], 1);
     assert_eq!(manifest["counts"]["tags"], 2);
@@ -246,8 +285,8 @@ async fn p3_export_dir_files_and_manifest() {
 async fn p3_export_zip_archive() {
     let dir = tempfile::tempdir().expect("tempdir");
     let cfg = test_config(dir.path());
-    let db = Db::open(&cfg.db_path).await.expect("open db");
-    seed_export_data(&db).await;
+    let mut db = Db::open(&cfg.db_path).await.expect("open db");
+    seed_export_data(&mut db).await;
 
     let out_dir = dir.path().join("zipexport");
     let data = export::run(&cfg, &out_dir, ExportFormat::Zip)
@@ -269,8 +308,16 @@ async fn p3_export_zip_archive() {
     assert_eq!(
         names,
         vec![
-            "alerts.json", "channels.csv", "ideas.json", "keyword_rankings.csv", "keywords.csv",
-            "manifest.json", "scores.json", "tags.csv", "videos.csv", "videos.json"
+            "alerts.json",
+            "channels.csv",
+            "ideas.json",
+            "keyword_rankings.csv",
+            "keywords.csv",
+            "manifest.json",
+            "scores.json",
+            "tags.csv",
+            "videos.csv",
+            "videos.json"
         ]
     );
     // Spot-check a decompressed entry.
@@ -289,25 +336,35 @@ async fn p3_export_zip_archive() {
 async fn p3_health_privacy_census() {
     let dir = tempfile::tempdir().expect("tempdir");
     let cfg = test_config(dir.path());
-    let db = Db::open(&cfg.db_path).await.expect("open db");
+    let mut db = Db::open(&cfg.db_path).await.expect("open db");
     let at = "2026-07-01T00:00:00Z";
-    for (id, privacy) in [
-        ("aaa111bbb22", "public"),
-        ("bbb222ccc33", "unlisted"),
-        ("ccc333ddd44", "private"),
-        ("ddd444eee55", "public"),
-    ] {
-        db.conn
-            .execute(
-                "INSERT INTO videos (video_id, title, published_at, fetched_at, updated_at, \
-                                     privacy_status) \
-                 VALUES (?1, 't', ?2, ?2, ?2, ?3)",
-                turso::params!(id, at, privacy),
-            )
-            .await
-            .expect("video");
+    {
+        let mut batch = db.begin_batch().await.expect("batch");
+        for (id, privacy) in [
+            ("aaa111bbb22", "public"),
+            ("bbb222ccc33", "unlisted"),
+            ("ccc333ddd44", "private"),
+            ("ddd444eee55", "public"),
+        ] {
+            batch
+                .upsert_video(&tubeforge::storage::db::VideoRow {
+                    video_id: id.into(),
+                    title: "t".into(),
+                    published_at: at.into(),
+                    fetched_at: at.into(),
+                    updated_at: at.into(),
+                    privacy_status: Some(privacy.into()),
+                    source: "rss".into(),
+                    ..Default::default()
+                })
+                .await
+                .expect("video");
+        }
+        batch.commit().await.expect("commit");
     }
-    let h = tubeforge::analytics::reports::health(&db, 14).await.expect("health");
+    let h = tubeforge::analytics::reports::health(&db, 14)
+        .await
+        .expect("health");
     assert_eq!(h["privacy"]["unlisted"], 1);
     assert_eq!(h["privacy"]["private"], 1);
 }
@@ -323,7 +380,9 @@ async fn p3_check_availability_requires_key() {
     cfg.youtube_api_key = None;
     Db::open(&cfg.db_path).await.expect("open db");
 
-    let err = availability::run(&cfg, &[]).await.expect_err("no key → error");
+    let err = availability::run(&cfg, &[])
+        .await
+        .expect_err("no key → error");
     assert!(
         matches!(err, tubeforge::error::TubeforgeError::Config(_)),
         "config error, got {err:?}"
@@ -335,7 +394,9 @@ async fn p3_filmot_get_requires_key() {
     // The key env is process-global; this crate's tests are the only users
     // of TUBEFORGE_FILMOT_KEY, so removing it here cannot race anything.
     std::env::remove_var(filmot::FILMOT_KEY_ENV);
-    let err = filmot::run_get("dQw4w9WgXcQ").await.expect_err("no key → error");
+    let err = filmot::run_get("dQw4w9WgXcQ")
+        .await
+        .expect_err("no key → error");
     assert!(
         matches!(err, tubeforge::error::TubeforgeError::Config(_)),
         "config error, got {err:?}"

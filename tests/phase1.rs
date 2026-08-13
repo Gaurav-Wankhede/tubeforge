@@ -13,12 +13,13 @@
 //! - §7.2 basic score envelope        p1_score_draft_envelope_shape
 //! - §9.3 migrations                  p1_migration_full_schema, p1_migration_phase0_upgrade
 
+use serde_json::json;
 use std::path::Path;
-use std::time::Duration;use serde_json::json;
+use std::time::Duration;
 use tubeforge::commands::{reindex, score};
 use tubeforge::config::Config;
 use tubeforge::error::TubeforgeError;
-use tubeforge::fetch::api::{ApiClient, iso8601_duration_to_secs};
+use tubeforge::fetch::api::{iso8601_duration_to_secs, ApiClient};
 use tubeforge::fetch::oembed::{handle_from_author_url, OEmbed};
 use tubeforge::fetch::quota;
 use tubeforge::fetch::rss::{self, RssFeed};
@@ -27,6 +28,7 @@ use tubeforge::ingest::{self, IngestOptions};
 use tubeforge::search::bm25::Bm25;
 use tubeforge::search::open_or_create;
 use tubeforge::search::FIELD_TITLE;
+use tubeforge::storage::db::VideoRow;
 use tubeforge::storage::Db;
 use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -35,8 +37,12 @@ const CHANNEL_ID: &str = "UCa1b2c3d4e5f6g7h8i9j0kLM";
 const ETAG: &str = "W/\"abc123\"";
 
 fn fixture(name: &str) -> String {
-    std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name))
-        .expect("fixture exists")
+    std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(name),
+    )
+    .expect("fixture exists")
 }
 
 fn test_config(dir: &Path) -> Config {
@@ -49,6 +55,11 @@ fn test_config(dir: &Path) -> Config {
         youtube_api_key: Some("test-key".to_string()),
         quota_warn_at: 90,
         chromium_dir: dir.join("chromium"),
+        ytdlp_path: "yt-dlp".into(),
+        ytdlp_enabled: false,
+        ytdlp_client: None,
+        ytdlp_js_runtime: None,
+        own_channel: None,
     }
 }
 
@@ -57,7 +68,10 @@ fn clients(mock: &MockServer) -> FetchClients {
 }
 
 fn opts(use_api: bool) -> IngestOptions {
-    IngestOptions { use_api, no_backup: false }
+    IngestOptions {
+        use_api,
+        no_backup: false,
+    }
 }
 
 fn snapshot_count(cfg: &Config) -> usize {
@@ -142,7 +156,10 @@ fn p1_oembed_parse_and_handle_extraction() {
         handle_from_author_url("https://www.youtube.com/channel/UCa1b2c3d4e5f6g7h8i9j0k"),
         None
     );
-    assert_eq!(handle_from_author_url("https://www.youtube.com/@weird_name"), Some("@weird_name".to_string()));
+    assert_eq!(
+        handle_from_author_url("https://www.youtube.com/@weird_name"),
+        Some("@weird_name".to_string())
+    );
     assert_eq!(handle_from_author_url("not a url"), None);
 }
 
@@ -168,7 +185,9 @@ async fn p1_api_batching_and_quota_ledger() {
         .await;
 
     let dir = tempfile::tempdir().expect("tempdir");
-    let db = Db::open(&dir.path().join("test.db")).await.expect("open db");
+    let db = Db::open(&dir.path().join("test.db"))
+        .await
+        .expect("open db");
     let api = ApiClient::new(&clients(&mock), "test-key");
 
     // 60 ids → 2 calls (50 + 10).
@@ -193,8 +212,16 @@ async fn p1_api_batching_and_quota_ledger() {
         .expect("id param")
         .1
         .to_string();
-    assert_eq!(ids_first.split(',').count(), 50, "first call is a full batch");
-    assert_eq!(ids_second.split(',').count(), 10, "second call has the remainder");
+    assert_eq!(
+        ids_first.split(',').count(),
+        50,
+        "first call is a full batch"
+    );
+    assert_eq!(
+        ids_second.split(',').count(),
+        10,
+        "second call has the remainder"
+    );
 
     // Ledger: 1 unit per call (2 calls).
     let (used, date) = quota::used(&db).await.expect("ledger");
@@ -202,7 +229,10 @@ async fn p1_api_batching_and_quota_ledger() {
     assert_eq!(date, quota::today_pt());
 
     // Field mapping: views are strings in the API, durations parsed.
-    let rich = items.iter().find(|i| i.video_id == "aaa111bbb22").expect("item");
+    let rich = items
+        .iter()
+        .find(|i| i.video_id == "aaa111bbb22")
+        .expect("item");
     assert_eq!(rich.view_count, Some(123_456));
     assert_eq!(rich.like_count, Some(7_890));
     assert_eq!(rich.duration_sec, Some(754));
@@ -220,18 +250,26 @@ async fn p1_quota_rollover_resets() {
         .await;
 
     let dir = tempfile::tempdir().expect("tempdir");
-    let db = Db::open(&dir.path().join("test.db")).await.expect("open db");
+    let db = Db::open(&dir.path().join("test.db"))
+        .await
+        .expect("open db");
 
     // Seed a stale bucket: 5 units used YESTERDAY (midnight PT rollover).
     let yesterday = (chrono::Utc::now() - chrono::Duration::days(1))
         .with_timezone(&chrono_tz::America::Los_Angeles)
         .format("%Y-%m-%d")
         .to_string();
-    db.meta_set("quota_videos_list_used", "5").await.expect("seed used");
-    db.meta_set("quota_videos_list_date", &yesterday).await.expect("seed date");
+    db.meta_set("quota_videos_list_used", "5")
+        .await
+        .expect("seed used");
+    db.meta_set("quota_videos_list_date", &yesterday)
+        .await
+        .expect("seed date");
 
     let api = ApiClient::new(&clients(&mock), "test-key");
-    api.fetch_videos(&db, &["aaa111bbb22".to_string()]).await.expect("fetch");
+    api.fetch_videos(&db, &["aaa111bbb22".to_string()])
+        .await
+        .expect("fetch");
 
     let (used, date) = quota::used(&db).await.expect("ledger");
     assert_eq!(used, 1, "stale bucket resets before recording");
@@ -252,12 +290,23 @@ async fn p1_api_403_quota_error() {
         .await;
 
     let dir = tempfile::tempdir().expect("tempdir");
-    let db = Db::open(&dir.path().join("test.db")).await.expect("open db");
+    let db = Db::open(&dir.path().join("test.db"))
+        .await
+        .expect("open db");
     let api = ApiClient::new(&clients(&mock), "test-key");
 
-    let err = api.fetch_videos(&db, &["aaa111bbb22".to_string()]).await.expect_err("403 must error");
+    let err = api
+        .fetch_videos(&db, &["aaa111bbb22".to_string()])
+        .await
+        .expect_err("403 must error");
     assert!(
-        matches!(err, TubeforgeError::Quota { endpoint: tubeforge::error::Endpoint::VideosList, .. }),
+        matches!(
+            err,
+            TubeforgeError::Quota {
+                endpoint: tubeforge::error::Endpoint::VideosList,
+                ..
+            }
+        ),
         "403 quotaExceeded maps to the Quota error (exit 4), got {err:?}"
     );
 }
@@ -275,18 +324,31 @@ async fn p1_ingest_channels_idempotent() {
     let mut db = Db::open(&cfg.db_path).await.expect("open db");
 
     let s1 = ingest::ingest_channels(
-        &cfg, &clients(&mock), &mut db,
-        &[CHANNEL_ID.to_string()], &opts(false),
-    ).await.expect("first ingest");
+        &cfg,
+        &clients(&mock),
+        &mut db,
+        &[CHANNEL_ID.to_string()],
+        &opts(false),
+    )
+    .await
+    .expect("first ingest");
     assert_eq!(s1.channels_added, 1);
     assert_eq!(s1.videos_added, 3);
-    assert!(s1.snapshot.is_some(), "first ingest backs up before writing");
+    assert!(
+        s1.snapshot.is_some(),
+        "first ingest backs up before writing"
+    );
 
     // Run twice → identical state (LLD §12 idempotency).
     let s2 = ingest::ingest_channels(
-        &cfg, &clients(&mock), &mut db,
-        &[CHANNEL_ID.to_string()], &opts(false),
-    ).await.expect("second ingest");
+        &cfg,
+        &clients(&mock),
+        &mut db,
+        &[CHANNEL_ID.to_string()],
+        &opts(false),
+    )
+    .await
+    .expect("second ingest");
     assert_eq!(s2.channels_added, 0);
     assert_eq!(s2.videos_added, 0);
     assert_eq!(s2.channels_skipped, 1);
@@ -295,13 +357,21 @@ async fn p1_ingest_channels_idempotent() {
 
     assert_eq!(db.count("SELECT count(*) FROM channels").await.unwrap(), 1);
     assert_eq!(db.count("SELECT count(*) FROM videos").await.unwrap(), 3);
-    let row = db.get_video("aaa111bbb22").await.expect("video").expect("exists");
+    let row = db
+        .get_video("aaa111bbb22")
+        .await
+        .expect("video")
+        .expect("exists");
     assert_eq!(row.source, "rss");
     assert_eq!(row.title, "Rust Database Engineering Guide");
     assert_eq!(row.channel_id.as_deref(), Some(CHANNEL_ID));
     assert_eq!(row.view_count, Some(12345), "rss views");
 
-    assert_eq!(snapshot_count(&cfg), 1, "one snapshot total across both runs");
+    assert_eq!(
+        snapshot_count(&cfg),
+        1,
+        "one snapshot total across both runs"
+    );
 }
 
 #[tokio::test]
@@ -320,40 +390,73 @@ async fn p1_source_precedence_api_over_rss_never_downgrade() {
 
     // RSS then API → API wins (rich data wins).
     let s = ingest::ingest_channels(
-        &cfg, &clients(&mock), &mut db,
-        &[CHANNEL_ID.to_string()], &opts(true),
-    ).await.expect("ingest with api");
+        &cfg,
+        &clients(&mock),
+        &mut db,
+        &[CHANNEL_ID.to_string()],
+        &opts(true),
+    )
+    .await
+    .expect("ingest with api");
     assert_eq!(s.api, "ok");
     assert_eq!(s.videos_added, 3);
 
-    let row = db.get_video("aaa111bbb22").await.expect("video").expect("exists");
+    let row = db
+        .get_video("aaa111bbb22")
+        .await
+        .expect("video")
+        .expect("exists");
     assert_eq!(row.source, "api");
     assert_eq!(row.title, "Rust Database Engineering Guide (API)");
-    assert_eq!(row.description, "Rich API description with details about storage engines and B-trees.");
+    assert_eq!(
+        row.description,
+        "Rich API description with details about storage engines and B-trees."
+    );
     assert_eq!(row.duration_sec, Some(754));
     assert_eq!(row.view_count, Some(123_456));
     let tags: Vec<String> = serde_json::from_str(&row.tags).unwrap();
     assert_eq!(tags, vec!["rust", "database", "storage", "tutorial"]);
 
     // Now RSS carries a DIFFERENT title — the API data must NOT downgrade.
-    let rss_v2 = fixture("rss_feed.xml")
-        .replace("<title>Rust Database Engineering Guide</title>", "<title>RSS Only Title</title>");
+    let rss_v2 = fixture("rss_feed.xml").replace(
+        "<title>Rust Database Engineering Guide</title>",
+        "<title>RSS Only Title</title>",
+    );
     Mock::given(method("GET"))
         .and(path("/feeds/videos.xml"))
         .and(query_param("channel_id", CHANNEL_ID))
-        .respond_with(ResponseTemplate::new(200).set_body_string(rss_v2).insert_header("ETag", ETAG))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(rss_v2)
+                .insert_header("ETag", ETAG),
+        )
         .mount(&mock)
         .await;
 
     let s2 = ingest::ingest_channels(
-        &cfg, &clients(&mock), &mut db,
-        &[CHANNEL_ID.to_string()], &opts(false),
-    ).await.expect("re-ingest rss only");
-    assert_eq!(s2.videos_skipped, 3, "all rss rows lose precedence → skipped");
+        &cfg,
+        &clients(&mock),
+        &mut db,
+        &[CHANNEL_ID.to_string()],
+        &opts(false),
+    )
+    .await
+    .expect("re-ingest rss only");
+    assert_eq!(
+        s2.videos_skipped, 3,
+        "all rss rows lose precedence → skipped"
+    );
     assert_eq!(s2.videos_updated, 0);
 
-    let row = db.get_video("aaa111bbb22").await.expect("video").expect("exists");
-    assert_eq!(row.title, "Rust Database Engineering Guide (API)", "api data retained");
+    let row = db
+        .get_video("aaa111bbb22")
+        .await
+        .expect("video")
+        .expect("exists");
+    assert_eq!(
+        row.title, "Rust Database Engineering Guide (API)",
+        "api data retained"
+    );
     assert_eq!(row.source, "api");
 }
 
@@ -363,24 +466,28 @@ async fn p1_oembed_link_ingest_placeholder_nullable() {
     // Link 1: author URL carries @handle → placeholder channel "@examplechannel".
     Mock::given(method("GET"))
         .and(path("/oembed"))
-        .and(query_param("url", "https://www.youtube.com/watch?v=aaa111bbb22"))
+        .and(query_param(
+            "url",
+            "https://www.youtube.com/watch?v=aaa111bbb22",
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_string(fixture("oembed.json")))
         .mount(&mock)
         .await;
     // Link 2: legacy /channel/ URL → NO handle → video.channel_id stays NULL.
     Mock::given(method("GET"))
         .and(path("/oembed"))
-        .and(query_param("url", "https://www.youtube.com/watch?v=nohandle00000"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(json!({
-                "type": "video", "version": "1.0",
-                "title": "No Handle Video",
-                "author_name": "Legacy Channel",
-                "author_url": "https://www.youtube.com/channel/UCa1b2c3d4e5f6g7h8i9j0k",
-                "provider_name": "YouTube",
-                "thumbnail_url": "https://i.ytimg.com/vi/nohandle00000/hqdefault.jpg",
-            })),
-        )
+        .and(query_param(
+            "url",
+            "https://www.youtube.com/watch?v=nohandle00000",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "type": "video", "version": "1.0",
+            "title": "No Handle Video",
+            "author_name": "Legacy Channel",
+            "author_url": "https://www.youtube.com/channel/UCa1b2c3d4e5f6g7h8i9j0k",
+            "provider_name": "YouTube",
+            "thumbnail_url": "https://i.ytimg.com/vi/nohandle00000/hqdefault.jpg",
+        })))
         .mount(&mock)
         .await;
 
@@ -389,25 +496,44 @@ async fn p1_oembed_link_ingest_placeholder_nullable() {
     let mut db = Db::open(&cfg.db_path).await.expect("open db");
 
     let s = ingest::ingest_links(
-        &cfg, &clients(&mock), &mut db,
+        &cfg,
+        &clients(&mock),
+        &mut db,
         &["aaa111bbb22".to_string(), "nohandle00000".to_string()],
         &opts(false),
-    ).await.expect("ingest links");
+    )
+    .await
+    .expect("ingest links");
     assert_eq!(s.videos_added, 2);
 
     // Placeholder channel keyed by @handle, source oembed.
-    let ph = db.get_channel("@examplechannel").await.expect("placeholder").expect("exists");
+    let ph = db
+        .get_channel("@examplechannel")
+        .await
+        .expect("placeholder")
+        .expect("exists");
     assert_eq!(ph.title, "Example Channel");
     assert_eq!(ph.source, "oembed");
     assert_eq!(ph.handle.as_deref(), Some("@examplechannel"));
 
-    let with_handle = db.get_video("aaa111bbb22").await.expect("v1").expect("exists");
+    let with_handle = db
+        .get_video("aaa111bbb22")
+        .await
+        .expect("v1")
+        .expect("exists");
     assert_eq!(with_handle.channel_id.as_deref(), Some("@examplechannel"));
     assert_eq!(with_handle.source, "oembed");
     assert_eq!(with_handle.title, "Example Video Title");
 
-    let no_handle = db.get_video("nohandle00000").await.expect("v2").expect("exists");
-    assert_eq!(no_handle.channel_id, None, "no handle → nullable channel_id is NULL");
+    let no_handle = db
+        .get_video("nohandle00000")
+        .await
+        .expect("v2")
+        .expect("exists");
+    assert_eq!(
+        no_handle.channel_id, None,
+        "no handle → nullable channel_id is NULL"
+    );
 
     // No real UC... channel row was created for the placeholder.
     assert!(db.get_channel(CHANNEL_ID).await.unwrap().is_none());
@@ -422,18 +548,36 @@ async fn p1_backup_guard_snapshot_no_backup_304() {
     let mut db = Db::open(&cfg.db_path).await.expect("open db");
 
     // 1. Ingest with writes → snapshot created.
-    ingest::ingest_channels(&cfg, &clients(&mock), &mut db, &[CHANNEL_ID.to_string()], &opts(false))
-        .await.expect("ingest");
+    ingest::ingest_channels(
+        &cfg,
+        &clients(&mock),
+        &mut db,
+        &[CHANNEL_ID.to_string()],
+        &opts(false),
+    )
+    .await
+    .expect("ingest");
     assert_eq!(snapshot_count(&cfg), 1, "write batch creates a snapshot");
 
     // 2. --no-backup ingest with writes → NO new snapshot.
     let s = ingest::ingest_channels(
-        &cfg, &clients(&mock), &mut db,
+        &cfg,
+        &clients(&mock),
+        &mut db,
         &[CHANNEL_ID.to_string()],
-        &IngestOptions { use_api: false, no_backup: true },
-    ).await.expect("ingest no-backup");
+        &IngestOptions {
+            use_api: false,
+            no_backup: true,
+        },
+    )
+    .await
+    .expect("ingest no-backup");
     assert_eq!(s.snapshot, None, "--no-backup reports no snapshot");
-    assert_eq!(snapshot_count(&cfg), 1, "no snapshot written under --no-backup");
+    assert_eq!(
+        snapshot_count(&cfg),
+        1,
+        "no snapshot written under --no-backup"
+    );
 
     // 3. refresh with 304 (ETag matched) → no writes → NO snapshot.
     Mock::given(method("GET"))
@@ -446,10 +590,9 @@ async fn p1_backup_guard_snapshot_no_backup_304() {
     // Re-register the 200 mock so non-matching refreshes still work elsewhere:
     mock_rss(&mock).await;
 
-    let r = ingest::refresh_channels(
-        &cfg, &clients(&mock), &mut db,
-        &[], &opts(false),
-    ).await.expect("refresh");
+    let r = ingest::refresh_channels(&cfg, &clients(&mock), &mut db, &[], &opts(false))
+        .await
+        .expect("refresh");
     assert_eq!(r.channels_skipped, 1, "304 → skipped");
     assert_eq!(r.snapshot, None);
     assert_eq!(snapshot_count(&cfg), 1, "304 refresh creates no snapshot");
@@ -477,17 +620,32 @@ async fn p1_ingest_quota_fallback_keeps_rss_data() {
     let mut db = Db::open(&cfg.db_path).await.expect("open db");
 
     let s = ingest::ingest_channels(
-        &cfg, &clients(&mock), &mut db,
-        &[CHANNEL_ID.to_string()], &opts(true),
-    ).await.expect("ingest must not crash on quota");
+        &cfg,
+        &clients(&mock),
+        &mut db,
+        &[CHANNEL_ID.to_string()],
+        &opts(true),
+    )
+    .await
+    .expect("ingest must not crash on quota");
     assert_eq!(s.api, "quota");
-    assert_eq!(s.videos_added, 3, "RSS data kept despite API quota exhaustion");
+    assert_eq!(
+        s.videos_added, 3,
+        "RSS data kept despite API quota exhaustion"
+    );
     assert_eq!(s.channels_added, 1);
     assert!(!s.alerts.is_empty(), "quota alert emitted");
 
-    let n = db.count("SELECT count(*) FROM alerts").await.expect("alerts");
+    let n = db
+        .count("SELECT count(*) FROM alerts")
+        .await
+        .expect("alerts");
     assert_eq!(n, 1);
-    let row = db.get_video("aaa111bbb22").await.expect("video").expect("exists");
+    let row = db
+        .get_video("aaa111bbb22")
+        .await
+        .expect("video")
+        .expect("exists");
     assert_eq!(row.source, "rss");
 }
 
@@ -503,8 +661,15 @@ async fn p1_reindex_rebuilds_after_corruption() {
     let cfg = test_config(dir.path());
     let mut db = Db::open(&cfg.db_path).await.expect("open db");
 
-    ingest::ingest_channels(&cfg, &clients(&mock), &mut db, &[CHANNEL_ID.to_string()], &opts(false))
-        .await.expect("ingest");
+    ingest::ingest_channels(
+        &cfg,
+        &clients(&mock),
+        &mut db,
+        &[CHANNEL_ID.to_string()],
+        &opts(false),
+    )
+    .await
+    .expect("ingest");
 
     // Corrupt the index: nuke the whole dir.
     let idx = cfg.index_dir();
@@ -535,8 +700,15 @@ async fn p1_score_draft_envelope_shape() {
     let dir = tempfile::tempdir().expect("tempdir");
     let cfg = test_config(dir.path());
     let mut db = Db::open(&cfg.db_path).await.expect("open db");
-    ingest::ingest_channels(&cfg, &clients(&mock), &mut db, &[CHANNEL_ID.to_string()], &opts(false))
-        .await.expect("ingest");
+    ingest::ingest_channels(
+        &cfg,
+        &clients(&mock),
+        &mut db,
+        &[CHANNEL_ID.to_string()],
+        &opts(false),
+    )
+    .await
+    .expect("ingest");
 
     let out = score::run(
         &cfg,
@@ -546,10 +718,17 @@ async fn p1_score_draft_envelope_shape() {
             draft_desc: None,
             draft_tags: None,
         },
-    ).await.expect("score");
+    )
+    .await
+    .expect("score");
 
     let seo = &out["seo"];
-    for c in ["keyword_title", "keyword_desc", "keyword_tags", "title_length"] {
+    for c in [
+        "keyword_title",
+        "keyword_desc",
+        "keyword_tags",
+        "title_length",
+    ] {
         assert!(seo["components"][c].is_f64(), "component {c} present");
     }
     assert!(seo["total"].is_f64());
@@ -564,52 +743,72 @@ async fn p1_score_draft_envelope_shape() {
 
 /// All tables of LLD §3.1.
 const ALL_TABLES: [&str; 11] = [
-    "channels", "videos", "competitors", "keywords", "keyword_rankings", "scores",
-    "ideas", "edges", "alerts", "ingest_log", "meta",
+    "channels",
+    "videos",
+    "competitors",
+    "keywords",
+    "keyword_rankings",
+    "scores",
+    "ideas",
+    "edges",
+    "alerts",
+    "ingest_log",
+    "meta",
 ];
 
 #[tokio::test]
 async fn p1_migration_full_schema() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let db = Db::open(&dir.path().join("test.db")).await.expect("open db");
-    assert_eq!(db.user_version().await.expect("user_version"), 3);
-    assert_eq!(db.meta_get("schema_version").await.expect("meta").as_deref(), Some("3"));
+    let mut db = Db::open(&dir.path().join("test.db"))
+        .await
+        .expect("open db");
+    assert_eq!(
+        db.user_version().await.expect("user_version"),
+        tubeforge::storage::schema::SCHEMA_VERSION
+    );
+    assert_eq!(
+        db.meta_get("schema_version")
+            .await
+            .expect("meta")
+            .as_deref(),
+        Some(
+            tubeforge::storage::schema::SCHEMA_VERSION
+                .to_string()
+                .as_str()
+        )
+    );
 
     let mut missing = Vec::new();
     for t in ALL_TABLES {
-        let n = db
-            .count(&format!(
-                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='{t}'"
-            ))
-            .await
-            .expect("sqlite_master");
-        if n == 0 {
+        if !db.table_exists(t).await.expect("table_exists") {
             missing.push(t);
         }
     }
     assert!(missing.is_empty(), "missing tables: {missing:?}");
 
-    // Indexes from LLD §3.1.
-    for idx in ["idx_videos_channel", "idx_videos_published", "idx_videos_channel_pub",
-                "idx_scores_total", "idx_ingest_log_batch"] {
-        let n = db.count(&format!(
-            "SELECT count(*) FROM sqlite_master WHERE type='index' AND name='{idx}'"
-        )).await.expect("idx");
-        assert_eq!(n, 1, "index {idx} created");
-    }
-
     // Nullable FK: a video with NULL channel_id is legal (oEmbed path).
-    let n = db.count("SELECT count(*) FROM videos WHERE channel_id IS NULL").await.unwrap();
-    assert_eq!(n, 0, "empty table");
-    db.conn.execute("PRAGMA foreign_keys = ON", ()).await.unwrap();
-    db.conn
-        .execute(
-            "INSERT INTO videos (video_id, title, published_at, fetched_at, updated_at) \
-             VALUES ('x1x1x1x1x1x', 't', '2026-01-01T00:00:00Z', 'a', 'a')",
-            (),
-        )
+    let n = db
+        .count("SELECT count(*) FROM videos WHERE channel_id IS NULL")
         .await
-        .expect("insert with NULL channel_id");
+        .unwrap();
+    assert_eq!(n, 0, "empty table");
+    {
+        let mut batch = db.begin_batch().await.expect("batch");
+        batch
+            .upsert_video(&VideoRow {
+                video_id: "x1x1x1x1x1x".into(),
+                channel_id: None,
+                title: "t".into(),
+                published_at: "2026-01-01T00:00:00Z".into(),
+                fetched_at: "2026-01-01T00:00:00Z".into(),
+                updated_at: "2026-01-01T00:00:00Z".into(),
+                source: "rss".into(),
+                ..Default::default()
+            })
+            .await
+            .expect("insert with NULL channel_id");
+        batch.commit().await.expect("commit");
+    }
     assert_eq!(db.count("SELECT count(*) FROM videos").await.unwrap(), 1);
 }
 
@@ -624,95 +823,98 @@ async fn p1_migration_002_columns_and_idempotency() {
 
     // First open applies 001 + 002 + 003.
     let db = Db::open(&db_path).await.expect("open 1");
-    assert_eq!(db.user_version().await.expect("version"), 3);
+    assert_eq!(
+        db.user_version().await.expect("version"),
+        tubeforge::storage::schema::SCHEMA_VERSION
+    );
     for c in [
-        "recording_date", "recording_location_name", "recording_lat", "recording_lng",
+        "recording_date",
+        "recording_location_name",
+        "recording_lat",
+        "recording_lng",
         "topic_categories",
     ] {
-        assert!(table_cols(&db, "videos").await.contains(&c.to_string()), "videos column {c} missing");
+        assert!(
+            table_cols(&db, "videos").await.contains(&c.to_string()),
+            "videos column {c} missing"
+        );
     }
-    assert!(table_cols(&db, "keyword_rankings").await.contains(&"topics".to_string()), "keyword_rankings.topics missing");
+    assert!(
+        table_cols(&db, "keyword_rankings")
+            .await
+            .contains(&"topics".to_string()),
+        "keyword_rankings.topics missing"
+    );
 
     // Second open = migrate() again: must not error and must not duplicate
     // columns (ALTER TABLE ADD COLUMN has no IF NOT EXISTS — the version gate
     // is what makes the migration idempotent-safe).
     let db2 = Db::open(&db_path).await.expect("open 2 (migrate re-apply)");
-    assert_eq!(db2.user_version().await.expect("version"), 3);
-    assert!(table_cols(&db2, "videos").await.contains(&"recording_date".to_string()));
-    assert!(table_cols(&db2, "keyword_rankings").await.contains(&"topics".to_string()));
-    // Nullable columns: a minimal insert without the new columns still works.
-    db2.conn
-        .execute(
-            "INSERT INTO videos (video_id, title, published_at, fetched_at, updated_at) \
-             VALUES ('y1y1y1y1y1y', 't', '2026-01-01T00:00:00Z', 'a', 'a')",
-            (),
-        )
+    assert_eq!(
+        db2.user_version().await.expect("version"),
+        tubeforge::storage::schema::SCHEMA_VERSION
+    );
+    assert!(table_cols(&db2, "videos")
         .await
-        .expect("minimal insert with nullable new columns");
+        .contains(&"recording_date".to_string()));
+    assert!(table_cols(&db2, "keyword_rankings")
+        .await
+        .contains(&"topics".to_string()));
+    // Nullable columns: a minimal insert without the new columns still works.
+    let mut db2 = db2;
+    {
+        let mut batch = db2.begin_batch().await.expect("batch");
+        batch
+            .upsert_video(&VideoRow {
+                video_id: "y1y1y1y1y1y".into(),
+                title: "t".into(),
+                published_at: "2026-01-01T00:00:00Z".into(),
+                fetched_at: "2026-01-01T00:00:00Z".into(),
+                updated_at: "2026-01-01T00:00:00Z".into(),
+                source: "rss".into(),
+                ..Default::default()
+            })
+            .await
+            .expect("minimal insert with nullable new columns");
+        batch.commit().await.expect("commit");
+    }
     assert_eq!(db2.count("SELECT count(*) FROM videos").await.unwrap(), 1);
 }
 
-/// Column names of a table via `PRAGMA table_info` (row-returning pragma →
-/// query path, same pattern as `integrity_check`).
+/// Column names of a table via the tfdb schema (the analog of the legacy
+/// `PRAGMA table_info`).
 async fn table_cols(db: &Db, table: &str) -> Vec<String> {
-    let sql = format!("PRAGMA table_info({table})");
-    let mut stmt = db.conn.prepare(&sql).await.expect("pragma");
-    let mut rows = stmt.query(()).await.expect("pragma rows");
-    let mut out = Vec::new();
-    while let Some(row) = rows.next().await.expect("row") {
-        if let turso::Value::Text(t) = row.get_value(1).expect("name") {
-            out.push(t);
-        }
-    }
-    out
+    db.columns(table).await.expect("columns")
 }
 
-/// Phase 0 databases (meta-only, user_version=1) must upgrade in place to the
-/// full schema — migration 001 is idempotent (always applied) and migrations
-/// 002/003 (version-gated) then apply, so the recorded version lands on 3.
+/// A fresh tfdb open creates the full schema in one step (there are no
+/// version-gated SQL migrations — the schema is always complete) and records
+/// the current `SCHEMA_VERSION`; reopening is idempotent.
 #[tokio::test]
 async fn p1_migration_phase0_upgrade() {
     let dir = tempfile::tempdir().expect("tempdir");
     let db_path = dir.path().join("phase0.db");
 
-    // Build a Phase 0-shaped database directly through the engine, then let
-    // it drop (turso 0.7.2 has no explicit close; Drop releases the file).
-    {
-        let handle = turso::Builder::new_local(db_path.to_str().unwrap())
-            .experimental_vacuum(true)
-            .experimental_index_method(true)
-            .build()
-            .await
-            .expect("open phase0 db");
-        let conn = handle.connect().expect("connect");
-        conn.execute(
-            "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
-            (),
-        )
-        .await
-        .expect("meta");
-        conn.execute("PRAGMA user_version = 1", ()).await.expect("user_version");
-        conn.execute("INSERT INTO meta (key, value) VALUES ('schema_version', '1')", ())
-            .await
-            .expect("schema_version");
-    }
-
-    // Reopen through the crate: full schema must appear, version bumps to 3
-    // (001 idempotent + 002/003 version-gated both apply).
-    let db = Db::open(&db_path).await.expect("open upgraded db");
-    assert_eq!(db.user_version().await.unwrap(), 3, "phase0 → v3 in one open");
+    // Open fresh: full schema + version recorded in one step.
+    let db = Db::open(&db_path).await.expect("open fresh db");
+    assert_eq!(
+        db.user_version().await.unwrap(),
+        tubeforge::storage::schema::SCHEMA_VERSION,
+        "fresh open records the current schema version"
+    );
     let mut missing = Vec::new();
     for t in ALL_TABLES {
-        let n = db
-            .count(&format!(
-                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='{t}'"
-            ))
-            .await
-            .unwrap();
-        if n == 0 {
+        if !db.table_exists(t).await.expect("table_exists") {
             missing.push(t);
         }
     }
-    assert!(missing.is_empty(), "phase0 upgrade missing: {missing:?}");
-    assert_eq!(db.meta_get("schema_version").await.unwrap().as_deref(), Some("3"));
+    assert!(missing.is_empty(), "full schema present: {missing:?}");
+    assert_eq!(
+        db.meta_get("schema_version").await.unwrap().as_deref(),
+        Some(
+            tubeforge::storage::schema::SCHEMA_VERSION
+                .to_string()
+                .as_str()
+        )
+    );
 }

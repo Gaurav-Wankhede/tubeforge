@@ -13,7 +13,10 @@ use tubeforge::storage::db::Db;
 /// Seed a temp database: two channels, two videos, scores, an idea, an alert,
 /// a keyword with two rank snapshots. Returns the open Db.
 async fn seed_db() -> Db {
-    let dir = tempfile::tempdir().expect("tempdir");
+    // Leak the tempdir so its DB file survives for the returned `Db`'s whole
+    // lifetime. tfdb reloads from disk on read (unlike turso, which held an
+    // open file handle), so dropping the tempdir here would delete the data.
+    let dir = Box::leak(Box::new(tempfile::tempdir().expect("tempdir")));
     let mut db = Db::open(&dir.path().join("dash.db"))
         .await
         .expect("open db");
@@ -124,10 +127,10 @@ async fn seed_db() -> Db {
 /// Spawn the app on an ephemeral port; returns (base_url, bound port, Db).
 async fn spawn_server() -> (String, u16, Db) {
     let db = seed_db().await;
-    // Second handle to the same connection pool for post-POST verification
-    // (turso Connection is Clone; the server keeps the first handle).
-    let verify_conn = db.conn.clone();
-    let path = db.path.clone();
+    // Second handle to the same in-memory engine (`Db` is `Arc<Mutex<Engine>>`,
+    // so a clone shares one engine; the server keeps the first Arc). Used for
+    // post-POST verification of the same write path the CLI uses.
+    let verify_db = db.clone();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind 0");
@@ -146,14 +149,7 @@ async fn spawn_server() -> (String, u16, Db) {
             .await
             .expect("serve");
     });
-    (
-        format!("http://{addr}"),
-        addr.port(),
-        Db {
-            conn: verify_conn,
-            path,
-        },
-    )
+    (format!("http://{addr}"), addr.port(), verify_db)
 }
 
 fn client() -> reqwest::Client {
@@ -765,3 +761,6 @@ async fn kg_pagerank_centrality_populates_channels() {
         "pagerank mass must sum to 1.0, got {sum}"
     );
 }
+
+
+

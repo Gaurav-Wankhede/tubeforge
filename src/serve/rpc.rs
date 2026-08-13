@@ -1353,11 +1353,10 @@ async fn handle_analysis_refresh(
                 if let Ok(info) = ytdlp.metadata(sample_vid).await {
                     if let Some(followers) = info.channel_follower_count {
                         let _ = db
-                            .conn
-                            .execute(
-                                "UPDATE channels SET subscriber_count = ?1, updated_at = ?2 \
-                                 WHERE channel_id = ?3",
-                                turso::params!(followers, crate::util::now_rfc3339(), own),
+                            .update_channel_subscribers(
+                                own,
+                                followers,
+                                &crate::util::now_rfc3339(),
                             )
                             .await;
                         subscribers_updated = 1;

@@ -1,7 +1,8 @@
 //! Storage layer (LLD §2).
 //!
-//! **Dependency rule:** this is the ONLY module that imports `turso`.
-//! Engine: Turso Database, WAL journal mode ONLY (never MVCC, ADR-5).
+//! **Dependency rule:** the live `Db` is backed by the from-scratch tfdb
+//! engine (`crate::tfdb`), re-exported through `db`. The legacy turso SQL
+//! dependency was removed entirely; tfdb is WAL + CRC + checkpoint (ADR-5).
 
 pub mod backup;
 pub mod db;
