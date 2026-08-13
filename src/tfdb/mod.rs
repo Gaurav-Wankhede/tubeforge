@@ -25,6 +25,7 @@
 
 pub mod graph;
 pub mod hnsw;
+pub mod query;
 pub mod schema;
 pub mod store;
 pub mod tfdb_schema;
