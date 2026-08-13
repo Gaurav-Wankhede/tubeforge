@@ -6,7 +6,7 @@
 //! Source precedence (LLD §6.2): api > oembed > rss — rich data wins, never
 //! downgrade.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
@@ -48,378 +48,17 @@ pub struct IngestSummary {
     /// api enrichment state: off | ok | quota | error.
     pub api: String,
     pub alerts: Vec<String>,
-    /// Per-item rejects (item label, detail): checksum-invalid bare ids and
-    /// unsupported kinds (playlist/channel/handle in `ingest links` input).
-    /// Recorded into `ingest_log` as `failed` by `record_invalid_items`
-    /// (A1/A2 — labeled, never silently dropped).
+    /// Per-item rejects (checksum-invalid ids, unsupported kinds).
     pub rejected: Vec<(String, String)>,
 }
 
-type LogRow = (String, String, Option<String>); // item, status, detail
-
-// ---------------------------------------------------------------------------
-// Channel reference resolution (LLD §6.1)
-// ---------------------------------------------------------------------------
-
-/// A resolved channel target: channel_id + optional handle (from @-refs).
-#[derive(Debug, Clone)]
-struct Target {
-    channel_id: String,
-    handle: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum ChannelRef {
-    Direct(String),
-    Handle(String),
-}
-
-/// Accepts `UC...` ids (and `SC...` legacy show ids, normalized to `UC`),
-/// full URLs (youtube.com/@x, /channel/UC..., /user/NAME, /c/NAME), and
-/// `@handle` forms (LLD §6.1, extended by A2).
-pub fn parse_channel_ref(input: &str) -> Result<ChannelRef, TubeforgeError> {
-    let t = input.trim();
-    if t.is_empty() {
-        return Err(TubeforgeError::Usage("empty channel reference".into()));
-    }
-    let normalized = normalize_channel_id(t);
-    if is_channel_id(&normalized) {
-        return Ok(ChannelRef::Direct(normalized));
-    }
-    if let Some(h) = t.strip_prefix('@') {
-        if !h.is_empty() && !h.contains('/') {
-            return Ok(ChannelRef::Handle(format!("@{h}")));
-        }
-    }
-    if let Ok(u) = url::Url::parse(t) {
-        let host = u.host_str().unwrap_or("").to_ascii_lowercase();
-        if host == "youtube.com" || host.ends_with(".youtube.com") || host == "youtu.be" {
-            if let Some(segs) = u.path_segments() {
-                let segs: Vec<String> = segs.map(normalize_channel_id).collect();
-                for (i, seg) in segs.iter().enumerate() {
-                    if let Some(h) = seg.strip_prefix('@') {
-                        if !h.is_empty() {
-                            return Ok(ChannelRef::Handle(format!("@{h}")));
-                        }
-                    }
-                    if is_channel_id(seg) {
-                        return Ok(ChannelRef::Direct(seg.clone()));
-                    }
-                    // Legacy /user/NAME and /c/NAME slugs resolve through the
-                    // @handle path (stored for later resolution, A2).
-                    if matches!(seg.as_str(), "user" | "c") && i + 1 < segs.len() {
-                        let name = segs[i + 1].as_str();
-                        if !name.is_empty() {
-                            return Ok(ChannelRef::Handle(format!("@{name}")));
-                        }
-                    }
-                }
-            }
-        }
-    }
-    Err(TubeforgeError::Usage(format!(
-        "cannot resolve channel reference: {input:?} (expected UC... id, URL, or @handle)"
-    )))
-}
-
-/// A channel id is a `UC`-prefixed base64-ish id (canonical YouTube form:
-/// `UC` + 22 chars; the 22..=28 window tolerates legacy/edge ids).
-pub fn is_channel_id(s: &str) -> bool {
-    (22..=28).contains(&s.len())
-        && s.starts_with("UC")
-        && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-}
-
-// ---------------------------------------------------------------------------
-// ID validation (A1) — archiveteam-derived checksums, via MW Metadata
-// (mattwright324/youtube-metadata, MIT — js/shared.js isValidVideoId /
-// isValidChannelId).
-// ---------------------------------------------------------------------------
-
-/// Valid last chars of a canonical video id (archiveteam YouTube technical
-/// details): `[AEIMQUYcgkosw048]`.
-pub const VIDEO_ID_CHECKSUM_CHARS: [char; 16] = [
-    'A', 'E', 'I', 'M', 'Q', 'U', 'Y', 'c', 'g', 'k', 'o', 's', 'w', '0', '4', '8',
-];
-
-/// Valid last chars of the 22-char base64 core of a channel id: `[AQgw]`.
-pub const CHANNEL_ID_CHECKSUM_CHARS: [char; 4] = ['A', 'Q', 'g', 'w'];
-
-/// `^[A-Za-z0-9_-]{10}[AEIMQUYcgkosw048]$` — a bare 11-char video id whose
-/// last char passes the checksum. URL-extracted ids are authoritative and
-/// must NOT be checksummed (A1).
-pub fn valid_video_id_checksum(id: &str) -> bool {
-    id.len() == 11
-        && id.bytes().all(|b| is_id_char(&b))
-        && ends_with_any(id, &VIDEO_ID_CHECKSUM_CHARS)
-}
-
-/// Checksum-valid bare channel id: the trailing 22-char base64 core must end
-/// in `[AQgw]` — canonical `UC` + 22 (24 chars, the LLD §6.1 form) or a bare
-/// 22-char legacy id (`^[A-Za-z0-9_-]{21}[AQgw]$`). URL-extracted channel
-/// ids are authoritative and must NOT be checksummed (A1).
-pub fn valid_channel_id_checksum(id: &str) -> bool {
-    let core = match id.len() {
-        22 => Some(id),
-        24 => id.strip_prefix("UC"),
-        _ => None,
-    };
-    core.is_some_and(|c| {
-        c.bytes().all(|b| is_id_char(&b)) && ends_with_any(c, &CHANNEL_ID_CHECKSUM_CHARS)
-    })
-}
-
-fn ends_with_any(s: &str, set: &[char]) -> bool {
-    s.chars().last().is_some_and(|c| set.contains(&c))
-}
-
-// ---------------------------------------------------------------------------
-// Input extraction (LLD §6.1, extended by A2)
-// ---------------------------------------------------------------------------
-
-/// A single parsed input item (MW Metadata `determineInput` table, adapted
-/// to the 11-char capture contract of LLD §6.1).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum InputItem {
-    /// URL-extracted video id — authoritative, no checksum applied.
-    VideoUrl(String),
-    /// Bare 11-char video id — caller checks `valid_video_id_checksum`.
-    VideoBare(String),
-    /// Playlist id (`playlist?list=` or bare `UU|UUSH|PL|FL|SP|OLAK` prefix).
-    Playlist(String),
-    /// URL-extracted channel id (`/channel/...`, `/show/SC...` — SC already
-    /// normalized to UC) — authoritative, no checksum applied.
-    ChannelUrl(String),
-    /// Bare channel id (`UC`/`SC` + 22, SC normalized to UC) — caller checks
-    /// `valid_channel_id_checksum`.
-    ChannelBare(String),
-    /// `@handle` (bare or `youtube.com/@x`) — resolve via `parse_channel_ref`.
-    Handle(String),
-    /// `/user/NAME` or `/c/NAME` slug — stored for later resolution.
-    Custom(String),
-}
-
-/// Capture mode per marker: video markers take exactly 11 id-chars (LLD §6.1
-/// contract — trailing junk is NOT captured); id markers take a run of id
-/// chars; name markers (handles, /user/, /c/) take everything up to a
-/// delimiter.
-enum Capture {
-    Video11,
-    IdRun,
-    UntilDelim,
-}
-
-/// Marker table (A2, from MW Metadata shared.js `patterns`). Deterministic
-/// leftmost match; ties at the same byte position go to the EARLIER marker
-/// in the list, so `channel/` must precede its prefix `c/`.
-const MARKERS: [(&str, Capture); 14] = [
-    ("v=", Capture::Video11),
-    ("shorts/", Capture::Video11),
-    ("youtu.be/", Capture::Video11),
-    ("/v/", Capture::Video11),
-    ("/embed/", Capture::Video11),
-    ("/video/", Capture::Video11),
-    ("/watch/", Capture::Video11),
-    ("/live/", Capture::Video11),
-    ("playlist?list=", Capture::IdRun),
-    ("youtube.com/channel/", Capture::IdRun),
-    ("youtube.com/show/", Capture::IdRun),
-    ("youtube.com/user/", Capture::UntilDelim),
-    ("youtube.com/c/", Capture::UntilDelim),
-    ("youtube.com/@", Capture::UntilDelim),
-];
-
-/// The extraction contract (LLD §6.1) extended (A2): all video URL forms
-/// (`v=`, `/v/`, `/embed/`, `/shorts/`, `/video/`, `/watch/`, `/live/`,
-/// `youtu.be/`) plus bare 11-char ids. Bare ids must pass the archiveteam
-/// checksum (A1); URL captures are authoritative. Deterministic
-/// leftmost-match scanning with per-item continue semantics and order-
-/// preserving dedupe.
-pub fn extract_video_ids(input: &str) -> Vec<String> {
-    let mut ids = Vec::new();
-    for item in parse_input_items(input) {
-        let id = match item {
-            InputItem::VideoUrl(id) => Some(id),
-            InputItem::VideoBare(id) if valid_video_id_checksum(&id) => Some(id),
-            _ => None,
-        };
-        if let Some(id) = id {
-            if !ids.contains(&id) {
-                ids.push(id);
-            }
-        }
-    }
-    ids
-}
-
-/// Parse multi-line input into typed items (A2): per line — bare ids first
-/// (whole-line anchored, MW style), then the marker scan. Order-preserving
-/// dedupe of identical (kind, value) pairs.
-pub fn parse_input_items(input: &str) -> Vec<InputItem> {
-    let mut out = Vec::new();
-    for line in input.lines() {
-        let t = line.trim();
-        if t.is_empty() {
-            continue;
-        }
-        if let Some(item) = bare_item(t) {
-            push_item(&mut out, item);
-        } else {
-            scan_line(t, &mut out);
-        }
-    }
-    out
-}
-
-/// Whole-line bare inputs (MW anchored patterns): `@handle`, 11-char video
-/// id, `UC`/`SC` + 22 channel id (SC→UC), playlist-prefixed id.
-fn bare_item(t: &str) -> Option<InputItem> {
-    if let Some(h) = t.strip_prefix('@') {
-        if !h.is_empty() && !h.contains('/') && !h.contains('?') {
-            return Some(InputItem::Handle(format!("@{h}")));
-        }
-    }
-    if t.len() == 11 && t.bytes().all(|b| is_id_char(&b)) {
-        return Some(InputItem::VideoBare(t.to_string()));
-    }
-    if t.len() == 24 && (t.starts_with("UC") || t.starts_with("SC"))
-        && t.bytes().all(|b| is_id_char(&b))
-    {
-        return Some(InputItem::ChannelBare(normalize_channel_id(t)));
-    }
-    for prefix in ["UU", "UUSH", "PL", "FL", "SP", "OLAK"] {
-        if t.len() > prefix.len() && t.starts_with(prefix) && t.bytes().all(|b| is_id_char(&b)) {
-            return Some(InputItem::Playlist(t.to_string()));
-        }
-    }
-    None
-}
-
-/// Leftmost-marker scan of one line, per-item continue semantics (the
-/// Phase 0 contract: a failed capture advances one byte and keeps scanning).
-fn scan_line(line: &str, out: &mut Vec<InputItem>) {
-    let bytes = line.as_bytes();
-    let n = bytes.len();
-    let mut pos = 0;
-    while pos < n {
-        let mut found_at = usize::MAX;
-        let mut found = 0usize;
-        for (mi, (marker, _)) in MARKERS.iter().enumerate() {
-            if let Some(rel) = find_sub(bytes, marker.as_bytes(), pos) {
-                if rel < found_at {
-                    found_at = rel;
-                    found = mi;
-                }
-            }
-        }
-        if found_at == usize::MAX {
-            break;
-        }
-        let (marker, capture) = &MARKERS[found];
-        let cap_start = found_at + marker.len();
-        match capture {
-            Capture::Video11 => {
-                if cap_start + 11 <= n && bytes[cap_start..cap_start + 11].iter().all(is_id_char) {
-                    let id = String::from_utf8_lossy(&bytes[cap_start..cap_start + 11]).to_string();
-                    push_item(out, InputItem::VideoUrl(id));
-                    pos = cap_start + 11;
-                } else {
-                    pos = found_at + 1;
-                }
-            }
-            Capture::IdRun => {
-                let run = take_id_run(bytes, cap_start);
-                if !run.is_empty() {
-                    let value = String::from_utf8_lossy(run).to_string();
-                    push_item(out, id_run_item(marker, value));
-                    pos = cap_start + run.len();
-                } else {
-                    pos = found_at + 1;
-                }
-            }
-            Capture::UntilDelim => {
-                let run = take_until_delim(bytes, cap_start);
-                if !run.is_empty() {
-                    let value = String::from_utf8_lossy(run).to_string();
-                    push_item(out, delim_item(marker, value));
-                    pos = cap_start + run.len();
-                } else {
-                    pos = found_at + 1;
-                }
-            }
-        }
+impl IngestSummary {
+    pub fn ok(&self) -> bool {
+        self.channels_failed == 0 && self.videos_failed == 0
     }
 }
 
-fn id_run_item(marker: &str, value: String) -> InputItem {
-    match marker {
-        "playlist?list=" => InputItem::Playlist(value),
-        "youtube.com/channel/" | "youtube.com/show/" => {
-            InputItem::ChannelUrl(normalize_channel_id(&value))
-        }
-        _ => unreachable!("id-run markers covered"),
-    }
-}
-
-fn delim_item(marker: &str, value: String) -> InputItem {
-    match marker {
-        "youtube.com/user/" | "youtube.com/c/" => InputItem::Custom(value),
-        "youtube.com/@" => InputItem::Handle(format!("@{value}")),
-        _ => unreachable!("delim markers covered"),
-    }
-}
-
-fn take_id_run(bytes: &[u8], from: usize) -> &[u8] {
-    let mut end = from;
-    while end < bytes.len() && is_id_char(&bytes[end]) {
-        end += 1;
-    }
-    &bytes[from..end]
-}
-
-fn take_until_delim(bytes: &[u8], from: usize) -> &[u8] {
-    let mut end = from;
-    while end < bytes.len() && !matches!(bytes[end], b'/' | b'?' | b' ' | b'\t') {
-        end += 1;
-    }
-    &bytes[from..end]
-}
-
-fn push_item(out: &mut Vec<InputItem>, item: InputItem) {
-    if !out.contains(&item) {
-        out.push(item);
-    }
-}
-
-/// `SC`-prefixed channel ids (legacy shows) query as their `UC` twin — the
-/// MW Metadata quirk (`/show/SC...` → transform prefix before querying).
-fn normalize_channel_id(s: &str) -> String {
-    if s.len() == 24 && s.starts_with("SC") && s.bytes().all(|b| is_id_char(&b)) {
-        format!("UC{}", &s[2..])
-    } else {
-        s.to_string()
-    }
-}
-
-fn find_sub(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
-    if needle.is_empty() || from >= hay.len() || needle.len() > hay.len() - from {
-        return None;
-    }
-    (from..=hay.len() - needle.len()).find(|&i| hay[i..i + needle.len()] == *needle)
-}
-
-fn is_id_char(b: &u8) -> bool {
-    b.is_ascii_alphanumeric() || *b == b'_' || *b == b'-'
-}
-
-/// Parse multi-line input: blank-line separated groups, `#` comments (LLD §6.1).
-pub fn parse_links_input(input: &str) -> Vec<String> {
-    input
-        .lines()
-        .map(|l| l.split('#').next().unwrap_or("").trim().to_string())
-        .filter(|l| !l.is_empty())
-        .collect()
-}
+type LogRow = (String, String, Option<String>);
 
 // ---------------------------------------------------------------------------
 // Entry points
@@ -439,7 +78,10 @@ pub async fn ingest_channels(
     let mut targets = Vec::new();
     for r in refs {
         match parse_channel_ref(r)? {
-            ChannelRef::Direct(id) => targets.push(Target { channel_id: id, handle: None }),
+            ChannelRef::Direct(id) => targets.push(Target {
+                channel_id: id,
+                handle: None,
+            }),
             ChannelRef::Handle(h) => {
                 // @handle needs channels.list(forHandle) → API key (LLD §6.1).
                 let key = cfg.youtube_api_key.as_deref().ok_or_else(|| {
@@ -448,7 +90,10 @@ pub async fn ingest_channels(
                     ))
                 })?;
                 let id = ApiClient::new(clients, key).resolve_handle(&h).await?;
-                targets.push(Target { channel_id: id, handle: Some(h) });
+                targets.push(Target {
+                    channel_id: id,
+                    handle: Some(h),
+                });
             }
         }
     }
@@ -469,7 +114,10 @@ pub async fn refresh_channels(
     let mut targets = Vec::new();
     if only.is_empty() {
         for c in db.all_channels().await? {
-            targets.push(Target { channel_id: c.channel_id, handle: c.handle });
+            targets.push(Target {
+                channel_id: c.channel_id,
+                handle: c.handle,
+            });
         }
     } else {
         for r in only {
@@ -513,7 +161,11 @@ pub async fn ingest_links(
 
     let mut summary = IngestSummary {
         batch_id: util::batch_id(),
-        api: if opts.use_api { "ok".to_string() } else { "off".to_string() },
+        api: if opts.use_api {
+            "ok".to_string()
+        } else {
+            "off".to_string()
+        },
         ..Default::default()
     };
     let now = util::now_rfc3339();
@@ -529,7 +181,12 @@ pub async fn ingest_links(
             Ok(items) => items,
             Err(TubeforgeError::Quota { .. }) => {
                 summary.api = "quota".to_string();
-                alert_quota(db, &mut summary, "videos.list quota exhausted — fell back to oEmbed").await;
+                alert_quota(
+                    db,
+                    &mut summary,
+                    "videos.list quota exhausted — fell back to oEmbed",
+                )
+                .await;
                 Vec::new()
             }
             Err(e) => {
@@ -544,7 +201,7 @@ pub async fn ingest_links(
                 if placeholder_ids.insert(cid.clone()) {
                     channels.push(ChannelRow {
                         channel_id: cid.clone(),
-                        title: ctitle.clone(),
+                        title: ctitle.trim().to_string(),
                         source: "api".to_string(),
                         fetched_at: now.clone(),
                         updated_at: now.clone(),
@@ -563,12 +220,22 @@ pub async fn ingest_links(
         match oembed::fetch(clients, id).await {
             Ok(o) => {
                 let handle = o.handle();
-                let (row, chan) = video_from_oembed(&o, id, handle.as_deref(), &now);
-                if let Some(c) = chan {
+                // If the handle already maps to a stored canonical channel,
+                // attach the oEmbed video to that row instead of creating a
+                // placeholder that would later split/duplicate the channel.
+                let resolved = match handle.as_deref() {
+                    Some(h) => db.get_channel_by_handle(h).await?.map(|c| c.channel_id),
+                    None => None,
+                };
+                let channel_id = resolved.as_deref().or(handle.as_deref());
+                let (mut row, chan) = video_from_oembed(&o, id, channel_id, &now);
+                if let Some(mut c) = chan {
+                    c.title = c.title.trim().to_string();
                     if placeholder_ids.insert(c.channel_id.clone()) {
                         channels.push(c);
                     }
                 }
+                row.title = row.title.trim().to_string();
                 videos.push(row);
                 logs.push((
                     format!("video {id}"),
@@ -578,7 +245,11 @@ pub async fn ingest_links(
             }
             Err(e) => {
                 summary.videos_failed += 1;
-                logs.push((format!("video {id}"), "failed".to_string(), Some(e.to_string())));
+                logs.push((
+                    format!("video {id}"),
+                    "failed".to_string(),
+                    Some(e.to_string()),
+                ));
             }
         }
     }
@@ -627,7 +298,9 @@ async fn run_channel_batch(
                     .channel_title
                     .clone()
                     .or_else(|| existing.as_ref().map(|c| c.title.clone()))
-                    .unwrap_or_else(|| t.channel_id.clone());
+                    .unwrap_or_else(|| t.channel_id.clone())
+                    .trim()
+                    .to_string();
                 let handle = t
                     .handle
                     .clone()
@@ -635,7 +308,7 @@ async fn run_channel_batch(
                 let chan = ChannelRow {
                     channel_id: t.channel_id.clone(),
                     handle,
-                    title: title.clone(),
+                    title,
                     description: existing.as_ref().and_then(|c| c.description.clone()),
                     source: "rss".to_string(),
                     etag,
@@ -649,7 +322,7 @@ async fn run_channel_batch(
                         channels.push(chan);
                     }
                     Some(ex) => {
-                        let meta_changed = ex.title != title || ex.handle != chan.handle;
+                        let meta_changed = ex.title != chan.title || ex.handle != chan.handle;
                         if meta_changed {
                             summary.channels_updated += 1;
                             channels.push(chan);
@@ -694,7 +367,12 @@ async fn run_channel_batch(
             }
             Err(TubeforgeError::Quota { .. }) => {
                 summary.api = "quota".to_string();
-                alert_quota(db, &mut summary, "videos.list quota exhausted — keeping RSS data").await;
+                alert_quota(
+                    db,
+                    &mut summary,
+                    "videos.list quota exhausted — keeping RSS data",
+                )
+                .await;
             }
             Err(e) => {
                 summary.api = "error".to_string();
@@ -705,6 +383,24 @@ async fn run_channel_batch(
 
     // 3. Change detection + backup guard + single transaction + index.
     write_batch(cfg, db, opts, &mut summary, channels, videos, logs).await?;
+
+    // Phase 6.6: channel growth snapshot (migration 007) — one row per
+    // refreshed channel per run, with the DB-derived counts. RSS carries no
+    // subscriber numbers, so backfill from the channels table (kept current by
+    // the yt-dlp/API metadata enrichment) and dedupe to the latest snapshot
+    // per channel per day.
+    for t in targets {
+        let total_views = db.channel_total_views(&t.channel_id).await?;
+        let video_count = db.channel_video_count(&t.channel_id).await?;
+        // Backfill subscriber count from the channels table when available.
+        let subs = db
+            .get_channel(&t.channel_id)
+            .await?
+            .and_then(|c| c.subscriber_count);
+        db.upsert_channel_snapshot_daily(&t.channel_id, subs, Some(video_count), Some(total_views))
+            .await?;
+    }
+
     Ok(summary)
 }
 
@@ -743,15 +439,98 @@ async fn fetch_api_items(
 // Write phase (LLD §6.3): backup guard → one transaction → index → logs
 // ---------------------------------------------------------------------------
 
+/// Decide which channel rows to write and which placeholder/stale ids need to
+/// be merged into a canonical channel. A real channel row always wins over an
+/// `@handle` placeholder with the same handle; placeholders arriving after
+/// the real row are dropped, and real rows arriving after a placeholder merge
+/// on top of it.
+fn plan_channel_merges(
+    channels: &[ChannelRow],
+    db_holders: &HashMap<String, String>,
+) -> (Vec<ChannelRow>, Vec<(String, String)>) {
+    let mut out: Vec<ChannelRow> = Vec::new();
+    let mut repoint: Vec<(String, String)> = Vec::new();
+    let mut claimed: HashMap<String, String> = HashMap::new(); // handle -> winning channel_id
+
+    fn is_placeholder(id: &str) -> bool {
+        id.starts_with('@')
+    }
+
+    for c in channels {
+        let Some(h) = c.handle.as_deref() else {
+            out.push(c.clone());
+            continue;
+        };
+        let h = h.to_string();
+        let holder = claimed
+            .get(&h)
+            .cloned()
+            .or_else(|| db_holders.get(&h).cloned());
+
+        match holder {
+            None => {
+                claimed.insert(h, c.channel_id.clone());
+                out.push(c.clone());
+            }
+            Some(w) if w == c.channel_id => {
+                // Channel already known (in db or batch) with same id — skip.
+                claimed.insert(h, w);
+            }
+            Some(w) if is_placeholder(&w) => {
+                // Real after placeholder: replace placeholder in output, merge data.
+                repoint.push((w.clone(), c.channel_id.clone()));
+                claimed.insert(h, c.channel_id.clone());
+                if let Some(pos) = out.iter().position(|x| x.channel_id == w) {
+                    out[pos] = c.clone();
+                } else {
+                    out.push(c.clone());
+                }
+            }
+            Some(w) if is_placeholder(&c.channel_id) => {
+                // Placeholder after real: point placeholder videos at the real id.
+                repoint.push((c.channel_id.clone(), w));
+            }
+            Some(w) => {
+                // Two real rows with the same handle (rare). Keep the existing
+                // winner and point this batch's videos at it.
+                repoint.push((c.channel_id.clone(), w));
+            }
+        }
+    }
+    (out, repoint)
+}
+
 async fn write_batch(
     cfg: &Config,
     db: &mut Db,
     opts: &IngestOptions,
     summary: &mut IngestSummary,
     channels: Vec<ChannelRow>,
-    videos: Vec<VideoRow>,
+    mut videos: Vec<VideoRow>,
     mut logs: Vec<LogRow>,
 ) -> Result<(), TubeforgeError> {
+    // Resolve @handle placeholder collisions before change detection: a real
+    // channel (UC… id with handle set) wins over an oEmbed placeholder, so
+    // the same logical channel is never split across two rows.
+    let mut db_holders: HashMap<String, String> = HashMap::new();
+    for c in &channels {
+        if let Some(h) = &c.handle {
+            if !db_holders.contains_key(h) {
+                if let Some(row) = db.get_channel_by_handle(h).await? {
+                    db_holders.insert(h.clone(), row.channel_id);
+                }
+            }
+        }
+    }
+    let (channels, repoints) = plan_channel_merges(&channels, &db_holders);
+    for v in &mut videos {
+        if let Some(cid) = &v.channel_id {
+            if let Some((_, new)) = repoints.iter().find(|(old, _)| old == cid) {
+                v.channel_id = Some(new.clone());
+            }
+        }
+    }
+
     // Channel rows written here were counted by the caller; videos need
     // change detection (source precedence + field comparison).
     let mut to_write: Vec<VideoRow> = Vec::new();
@@ -760,7 +539,11 @@ async fn write_batch(
             None => {
                 summary.videos_added += 1;
                 to_write.push(row.clone());
-                logs.push((format!("video {}", row.video_id), "ok".to_string(), Some("added".to_string())));
+                logs.push((
+                    format!("video {}", row.video_id),
+                    "ok".to_string(),
+                    Some("added".to_string()),
+                ));
             }
             Some(existing) => {
                 let in_rank = source_rank(&row.source);
@@ -770,22 +553,35 @@ async fn write_batch(
                     logs.push((
                         format!("video {}", row.video_id),
                         "skipped".to_string(),
-                        Some(format!("lower source precedence ({} < {})", row.source, existing.source)),
+                        Some(format!(
+                            "lower source precedence ({} < {})",
+                            row.source, existing.source
+                        )),
                     ));
                 } else if videos_equal(row, &existing) {
                     summary.videos_skipped += 1;
-                    logs.push((format!("video {}", row.video_id), "skipped".to_string(), Some("unchanged".to_string())));
+                    logs.push((
+                        format!("video {}", row.video_id),
+                        "skipped".to_string(),
+                        Some("unchanged".to_string()),
+                    ));
                 } else {
                     summary.videos_updated += 1;
                     to_write.push(row.clone());
-                    logs.push((format!("video {}", row.video_id), "ok".to_string(), Some("updated".to_string())));
+                    logs.push((
+                        format!("video {}", row.video_id),
+                        "ok".to_string(),
+                        Some("updated".to_string()),
+                    ));
                 }
             }
         }
     }
 
-    let has_changes = summary.channels_added + summary.channels_updated
-        + summary.videos_added + summary.videos_updated
+    let has_changes = summary.channels_added
+        + summary.channels_updated
+        + summary.videos_added
+        + summary.videos_updated
         > 0;
 
     // Backup guard: before EVERY batch that will write, unless --no-backup
@@ -796,6 +592,9 @@ async fn write_batch(
 
     if has_changes || !channels.is_empty() || !logs.is_empty() {
         let mut batch = db.begin_batch().await?;
+        for (old, new) in &repoints {
+            batch.merge_channel(old, new).await?;
+        }
         for c in &channels {
             batch.upsert_channel(c).await?;
         }
@@ -814,15 +613,12 @@ async fn write_batch(
     if !to_write.is_empty() {
         let docs: Vec<VideoDoc> = to_write.iter().map(video_to_doc).collect();
         let index = search::open_or_create(&cfg.index_dir())?;
-        let fields = index.schema();
-        let mut writer = index.writer(50_000_000).map_err(|e| TubeforgeError::Index {
-            detail: e.to_string(),
-        })?;
+        let mut writer = index.writer(50_000_000);
         for d in &docs {
-            search::index::upsert(&mut writer, &fields, d)?;
+            search::index::upsert(&mut writer, &search::Schema, d)?;
         }
         writer.commit().map_err(|e| TubeforgeError::Index {
-            detail: format!("commit: {e}"),
+            detail: e.to_string(),
         })?;
         tracing::info!(docs = docs.len(), "index updated");
         // Index freshness stamp (health checks last_reindex_at vs last ingest).
@@ -877,8 +673,8 @@ fn video_from_rss(v: &RssVideo, channel_id: &str, now: &str) -> VideoRow {
     VideoRow {
         video_id: v.video_id.clone(),
         channel_id: Some(channel_id.to_string()),
-        title: v.title.clone(),
-        description: v.description.clone(),
+        title: v.title.trim().to_string(),
+        description: v.description.trim().to_string(),
         tags: "[]".to_string(),
         published_at: normalize_ts(&v.published).unwrap_or_else(|| now.to_string()),
         view_count: v.views,
@@ -890,13 +686,23 @@ fn video_from_rss(v: &RssVideo, channel_id: &str, now: &str) -> VideoRow {
     }
 }
 
-fn video_from_oembed(o: &oembed::OEmbed, id: &str, handle: Option<&str>, now: &str) -> (VideoRow, Option<ChannelRow>) {
+fn video_from_oembed(
+    o: &oembed::OEmbed,
+    id: &str,
+    handle: Option<&str>,
+    now: &str,
+) -> (VideoRow, Option<ChannelRow>) {
     let row = VideoRow {
         video_id: id.to_string(),
         // oEmbed links have no channel_id; @handle-keyed placeholder channel
         // when the author URL carries a handle, else NULL (LLD §3.1 note).
         channel_id: handle.map(|h| h.to_string()),
-        title: o.title.clone().unwrap_or_else(|| id.to_string()),
+        title: o
+            .title
+            .clone()
+            .unwrap_or_else(|| id.to_string())
+            .trim()
+            .to_string(),
         description: String::new(),
         tags: "[]".to_string(),
         published_at: now.to_string(), // oEmbed carries no publish date (LLD §5.2)
@@ -909,7 +715,12 @@ fn video_from_oembed(o: &oembed::OEmbed, id: &str, handle: Option<&str>, now: &s
     let chan = handle.map(|h| ChannelRow {
         channel_id: h.to_string(),
         handle: Some(h.to_string()),
-        title: o.author_name.clone().unwrap_or_else(|| h.to_string()),
+        title: o
+            .author_name
+            .clone()
+            .unwrap_or_else(|| h.to_string())
+            .trim()
+            .to_string(),
         source: "oembed".to_string(),
         fetched_at: now.to_string(),
         updated_at: now.to_string(),
@@ -922,12 +733,13 @@ fn video_from_api(a: &ApiVideo, now: &str) -> VideoRow {
     VideoRow {
         video_id: a.video_id.clone(),
         channel_id: a.channel_id.clone(),
-        title: a.title.clone().unwrap_or_default(),
-        description: a.description.clone().unwrap_or_default(),
+        title: a.title.clone().unwrap_or_default().trim().to_string(),
+        description: a.description.clone().unwrap_or_default().trim().to_string(),
         tags: serde_json::to_string(&a.tags).unwrap_or_else(|_| "[]".to_string()),
         category_id: a.category_id.clone(),
         duration_sec: a.duration_sec,
-        published_at: normalize_ts(a.published_at.as_deref().unwrap_or("")).unwrap_or_else(|| now.to_string()),
+        published_at: normalize_ts(a.published_at.as_deref().unwrap_or(""))
+            .unwrap_or_else(|| now.to_string()),
         view_count: a.view_count,
         like_count: a.like_count,
         comment_count: a.comment_count,
@@ -939,7 +751,8 @@ fn video_from_api(a: &ApiVideo, now: &str) -> VideoRow {
         recording_location_name: a.recording_location_name.clone(),
         recording_lat: a.recording_lat,
         recording_lng: a.recording_lng,
-        topic_categories: serde_json::to_string(&a.topic_categories).unwrap_or_else(|_| "[]".to_string()),
+        topic_categories: serde_json::to_string(&a.topic_categories)
+            .unwrap_or_else(|_| "[]".to_string()),
         // Privacy is snapshotted separately by `check availability` — the
         // API path never sets it here.
         privacy_status: None,
@@ -953,17 +766,19 @@ fn merge_api_rows(videos: &mut [VideoRow], items: Vec<ApiVideo>) {
         items.into_iter().map(|i| (i.video_id.clone(), i)).collect();
     let now = util::now_rfc3339();
     for row in videos.iter_mut() {
-        let Some(a) = by_id.get(&row.video_id) else { continue };
+        let Some(a) = by_id.get(&row.video_id) else {
+            continue;
+        };
         row.source = "api".to_string();
         row.updated_at = now.clone();
         if let Some(t) = &a.title {
             if !t.is_empty() {
-                row.title = t.clone();
+                row.title = t.trim().to_string();
             }
         }
         if let Some(d) = &a.description {
             if !d.is_empty() {
-                row.description = d.clone();
+                row.description = d.trim().to_string();
             }
         }
         if !a.tags.is_empty() {
@@ -1031,9 +846,10 @@ fn video_to_doc(v: &VideoRow) -> VideoDoc {
 
 /// Normalize an RFC3339 timestamp to UTC seconds precision.
 fn normalize_ts(ts: &str) -> Option<String> {
-    DateTime::parse_from_rfc3339(ts)
-        .ok()
-        .map(|d| d.with_timezone(&Utc).to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+    DateTime::parse_from_rfc3339(ts).ok().map(|d| {
+        d.with_timezone(&Utc)
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    })
 }
 
 fn video_ids(videos: &[VideoRow]) -> Vec<String> {
@@ -1068,17 +884,17 @@ fn check_api_requirement(cfg: &Config, opts: &IngestOptions) -> Result<(), Tubef
 }
 
 async fn alert_quota(db: &Db, summary: &mut IngestSummary, message: &str) {
-    if let Err(e) = db.insert_alert("quota", None, message, "warn").await {
-        tracing::warn!(err = %e, "failed to write quota alert");
-    } else {
-        summary.alerts.push(message.to_string());
+    match db.insert_alert("quota", None, message, "warn").await {
+        Ok(0) => {}
+        Ok(_) => summary.alerts.push(message.to_string()),
+        Err(e) => tracing::warn!(err = %e, "failed to write quota alert"),
     }
 }
 
 /// Record per-item rejects (checksum-invalid ids, unsupported kinds) into
 /// `ingest_log` as `failed` rows so nothing is silently dropped (A1/A2
-/// labeling contract, LLD §6.4 "ingest_log rows per item"). Logs-only mini
-/// batch: no data writes, so no backup guard (LLD §6.3).
+/// labeling contract, LLD §6.4). Logs-only mini batch: no data writes, so no
+/// backup guard (LLD §6.3).
 pub async fn record_invalid_items(
     db: &mut Db,
     batch_id: &str,
@@ -1095,4 +911,479 @@ pub async fn record_invalid_items(
     }
     batch.commit().await?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Channel reference parsing
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChannelRef {
+    Direct(String),
+    Handle(String),
+}
+
+#[derive(Debug, Clone)]
+struct Target {
+    channel_id: String,
+    handle: Option<String>,
+}
+
+pub fn parse_channel_ref(s: &str) -> Result<ChannelRef, TubeforgeError> {
+    // Trim @ prefix only if the whole string is a handle; URLs are parsed below.
+    if let Some(rest) = s.strip_prefix('@') {
+        if !rest.is_empty() && rest.chars().all(valid_handle_char) {
+            return Ok(ChannelRef::Handle(format!("@{rest}")));
+        }
+    }
+    if let Ok(url) = url::Url::parse(s) {
+        let path = url.path().trim_matches('/');
+        // /channel/UC... or /c/... or /@handle
+        if let Some(rest) = path.strip_prefix("channel/") {
+            let id = rest.split('/').next().unwrap_or(rest);
+            if !id.is_empty() {
+                return Ok(ChannelRef::Direct(id.to_string()));
+            }
+        }
+        if let Some(rest) = path.strip_prefix("c/") {
+            let id = rest.split('/').next().unwrap_or(rest);
+            if !id.is_empty() {
+                return Ok(ChannelRef::Handle(format!("@{id}")));
+            }
+        }
+        if let Some(rest) = path.strip_prefix("show/") {
+            let id = rest.split('/').next().unwrap_or(rest);
+            if !id.is_empty() {
+                return Ok(ChannelRef::Direct(transform_sc_to_uc(id)));
+            }
+        }
+        if let Some(rest) = path.strip_prefix("user/") {
+            let id = rest.split('/').next().unwrap_or(rest);
+            if !id.is_empty() {
+                return Ok(ChannelRef::Handle(format!("@{id}")));
+            }
+        }
+        if let Some(rest) = path.strip_prefix('@') {
+            if !rest.is_empty() && rest.chars().all(valid_handle_char) {
+                return Ok(ChannelRef::Handle(format!("@{rest}")));
+            }
+        }
+    }
+    // Bare UC/SC/CL... channel id or @handle. SC is legacy → canonical UC.
+    let transformed = transform_sc_to_uc(s);
+    if transformed.starts_with("UC")
+        || transformed.starts_with("CL")
+        || transformed.starts_with("UU")
+    {
+        return Ok(ChannelRef::Direct(transformed));
+    }
+    Err(TubeforgeError::Usage(format!(
+        "unrecognized channel reference: {s}"
+    )))
+}
+
+fn valid_handle_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_' || c == '-' || c == '.'
+}
+
+// ---------------------------------------------------------------------------
+// Input parsing (used by `commands/ingest`)
+// ---------------------------------------------------------------------------
+
+/// Typed parsed item from link input (A2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InputItem {
+    VideoUrl(String),
+    VideoBare(String),
+    Playlist(String),
+    ChannelUrl(String),
+    ChannelBare(String),
+    Handle(String),
+    Custom(String),
+}
+
+/// Parse multi-line link input: strip blank lines and `#` comments, trim
+/// trailing `# …` comments from each line.
+pub fn parse_links_input(raw: &str) -> Vec<String> {
+    raw.lines()
+        .map(|l| {
+            let line = l.trim();
+            // strip inline `# ...` comments
+            let line = line.find('#').map(|i| &line[..i]).unwrap_or(line);
+            line.trim().to_string()
+        })
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .collect()
+}
+
+/// Classify each line into a typed `InputItem` for the reject/ingest
+/// partition (A1/A2 contract).
+pub fn parse_input_items(raw: &str) -> Vec<InputItem> {
+    let mut items = Vec::new();
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Ok(url) = url::Url::parse(line) {
+            let host = url.host_str().unwrap_or("");
+            let is_yt = host.ends_with("youtube.com") || host == "youtu.be";
+            if !is_yt {
+                continue;
+            }
+            let path = url.path().trim_matches('/');
+            if path == "playlist" || url.query_pairs().any(|(k, _)| k == "list") {
+                let id = url
+                    .query_pairs()
+                    .find(|(k, _)| k == "list")
+                    .map(|(_, v)| v.into_owned())
+                    .unwrap_or_default();
+                if !id.is_empty() {
+                    items.push(InputItem::Playlist(id));
+                }
+                continue;
+            }
+            if let Some(rest) = path.strip_prefix("channel/") {
+                let id = rest.split('/').next().unwrap_or(rest);
+                if !id.is_empty() {
+                    items.push(InputItem::ChannelUrl(id.to_string()));
+                }
+                continue;
+            }
+            if path.starts_with("show/") {
+                let id = path.strip_prefix("show/").unwrap_or(path);
+                let id = id.split('/').next().unwrap_or(id);
+                let id = transform_sc_to_uc(id);
+                items.push(InputItem::ChannelBare(id));
+                continue;
+            }
+            if let Some(rest) = path.strip_prefix("c/") {
+                let id = rest.split('/').next().unwrap_or(rest);
+                items.push(InputItem::Custom(id.to_string()));
+                continue;
+            }
+            if let Some(rest) = path.strip_prefix("user/") {
+                let id = rest.split('/').next().unwrap_or(rest);
+                items.push(InputItem::Custom(id.to_string()));
+                continue;
+            }
+            if let Some(rest) = path.strip_prefix('@') {
+                items.push(InputItem::Handle(format!("@{rest}")));
+                continue;
+            }
+            // watch, embed, v/, video, live, shorts → extract video id
+            if let Some(rest) = path.strip_prefix("shorts/") {
+                let id = rest.split('/').next().unwrap_or(rest);
+                items.push(InputItem::VideoUrl(id.to_string()));
+                continue;
+            }
+            if let Some(rest) = path.strip_prefix("embed/") {
+                let id = rest.split('/').next().unwrap_or(rest);
+                items.push(InputItem::VideoUrl(id.to_string()));
+                continue;
+            }
+            if let Some(rest) = path.strip_prefix("v/") {
+                let id = rest.split('/').next().unwrap_or(rest);
+                items.push(InputItem::VideoUrl(id.to_string()));
+                continue;
+            }
+            if let Some(rest) = path.strip_prefix("video/") {
+                let id = rest.split('/').next().unwrap_or(rest);
+                items.push(InputItem::VideoUrl(id.to_string()));
+                continue;
+            }
+            if let Some(rest) = path.strip_prefix("watch/") {
+                let id = rest.split('/').next().unwrap_or(rest);
+                items.push(InputItem::VideoUrl(id.to_string()));
+                continue;
+            }
+            if let Some(rest) = path.strip_prefix("live/") {
+                let id = rest.split('/').next().unwrap_or(rest);
+                items.push(InputItem::VideoUrl(id.to_string()));
+                continue;
+            }
+            if let Some((_, v)) = url.query_pairs().find(|(k, _)| k == "v") {
+                items.push(InputItem::VideoUrl(v.into_owned()));
+                continue;
+            }
+            if host == "youtu.be" {
+                let id = path.split('/').next().unwrap_or(path);
+                items.push(InputItem::VideoUrl(id.to_string()));
+                continue;
+            }
+        }
+        // Bare @handle
+        if let Some(rest) = line.strip_prefix('@') {
+            if !rest.is_empty() {
+                items.push(InputItem::Handle(line.to_string()));
+                continue;
+            }
+        }
+        // Bare PL... → playlist
+        if (line.starts_with("PL") || line.starts_with("UU")) && line.len() > 2 {
+            items.push(InputItem::Playlist(line.to_string()));
+            continue;
+        }
+        // Bare UC/CL channel id
+        let transformed = transform_sc_to_uc(line);
+        if (transformed.starts_with("UC") || transformed.starts_with("CL"))
+            && transformed.len() == 24
+        {
+            items.push(InputItem::ChannelBare(transformed));
+            continue;
+        }
+        // Bare 11-char video id (checksum validated later in partition_items)
+        if line.len() == 11
+            && line
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
+            items.push(InputItem::VideoBare(line.to_string()));
+            continue;
+        }
+        // Treat unrecognized as channel ref (will be rejected downstream)
+        items.push(InputItem::ChannelBare(line.to_string()));
+    }
+    items
+}
+
+/// Extract YouTube video ids from multi-line link/URL input. Bare 11-char
+/// ids are checksum-validated; URL captures are authoritative.
+pub fn extract_video_ids(input: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for line in input.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        // Strip inline `# ...` comments
+        let line = line.find('#').map(|i| &line[..i]).unwrap_or(line);
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(id) = extract_id_from_url(line) {
+            if seen.insert(id.clone()) {
+                ids.push(id);
+            }
+            continue;
+        }
+        // Regex fallback for malformed URLs / bare patterns (authoritative
+        // captures — no checksum needed, like URL-parsed captures).
+        if let Some(id) = extract_id_from_text(line) {
+            if seen.insert(id.clone()) {
+                ids.push(id);
+            }
+            continue;
+        }
+        // Bare 11-char video id
+        if line.len() == 11
+            && line
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+            && valid_video_id_checksum(line)
+            && seen.insert(line.to_string())
+        {
+            ids.push(line.to_string());
+        }
+    }
+    ids
+}
+
+fn extract_id_from_url(line: &str) -> Option<String> {
+    let url = url::Url::parse(line).ok()?;
+    let host = url.host_str()?;
+    let is_yt = host.ends_with("youtube.com") || host == "youtu.be";
+    if !is_yt {
+        return None;
+    }
+    let path = url.path().trim_matches('/');
+    // shorts, embed, v, video, live, watch paths
+    for prefix in &["shorts", "embed", "v", "video", "watch", "live"] {
+        if let Some(rest) = path.strip_prefix(*prefix) {
+            let rest = rest.trim_start_matches('/');
+            // Extract only the first 11 valid id chars (stop at non-id char)
+            let id: String = rest
+                .chars()
+                .take(11)
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+                .collect();
+            if id.len() == 11 {
+                return Some(id);
+            }
+        }
+    }
+    // watch?v=...
+    if let Some((_, v)) = url.query_pairs().find(|(k, _)| k == "v") {
+        let id = v.into_owned();
+        if !id.is_empty() {
+            return Some(id);
+        }
+    }
+    // youtu.be/<id> — extract first 11 valid id chars from path
+    if host == "youtu.be" {
+        let id: String = path
+            .chars()
+            .take(11)
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+            .collect();
+        if id.len() == 11 {
+            return Some(id);
+        }
+    }
+    None
+}
+
+/// Regex-free fallback: scan raw text for video id patterns (handles
+/// malformed URLs where url::Url::parse fails).
+fn extract_id_from_text(text: &str) -> Option<String> {
+    // Check v= first (more specific — youtu.be paths may contain junk).
+    // Then other path-based patterns, and finally youtu.be bare paths.
+    for needle in &["v=", "/v/", "/embed/", "/video/", "/shorts/", "youtu.be/"] {
+        if let Some(pos) = text.find(needle) {
+            let start = pos + needle.len();
+            let rest = &text[start..];
+            let id: String = rest
+                .chars()
+                .take(11)
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+                .collect();
+            if id.len() == 11 {
+                return Some(id);
+            }
+        }
+    }
+    None
+}
+
+/// Validate YouTube video id checksum (last char in the valid set).
+pub fn valid_video_id_checksum(id: &str) -> bool {
+    if id.len() != 11 {
+        return false;
+    }
+    matches!(
+        id.as_bytes()[10],
+        b'A' | b'E'
+            | b'I'
+            | b'M'
+            | b'Q'
+            | b'U'
+            | b'Y'
+            | b'c'
+            | b'g'
+            | b'k'
+            | b'o'
+            | b's'
+            | b'w'
+            | b'0'
+            | b'4'
+            | b'8'
+    )
+}
+
+/// Validate YouTube channel id checksum. Accepts both 24-char `UC...` ids
+/// and 22-char bare legacy ids. The last character must be in the upper half
+/// of the base64 alphabet (position >= 16).
+pub fn valid_channel_id_checksum(id: &str) -> bool {
+    let (id, bare) = if id.starts_with("UC") && id.len() == 24 {
+        (&id[2..], true)
+    } else if id.len() == 22 {
+        (id, true)
+    } else {
+        return false;
+    };
+    if !bare {
+        return false;
+    }
+    let alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let last = id.as_bytes()[id.len() - 1];
+    alphabet
+        .iter()
+        .position(|&b| b == last)
+        .is_some_and(|pos| pos >= 16)
+}
+
+/// Transform `SC...` legacy channel id prefix to canonical `UC...`.
+fn transform_sc_to_uc(id: &str) -> String {
+    if id.starts_with("SC") && id.len() == 24 {
+        format!("UC{}", &id[2..])
+    } else {
+        id.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn channel_ref_parsing() {
+        assert!(matches!(
+            parse_channel_ref("UCabc").unwrap(),
+            ChannelRef::Direct(_)
+        ));
+        assert!(
+            matches!(parse_channel_ref("@rust").unwrap(), ChannelRef::Handle(h) if h == "@rust")
+        );
+    }
+
+    #[test]
+    fn plan_keeps_real_channel_over_placeholder() {
+        let real = ChannelRow {
+            channel_id: "UC123".to_string(),
+            handle: Some("@rust".to_string()),
+            title: "Real".to_string(),
+            source: "api".to_string(),
+            fetched_at: "t".to_string(),
+            updated_at: "t".to_string(),
+            ..Default::default()
+        };
+        let placeholder = ChannelRow {
+            channel_id: "@rust".to_string(),
+            handle: Some("@rust".to_string()),
+            title: "Placeholder".to_string(),
+            source: "oembed".to_string(),
+            fetched_at: "t".to_string(),
+            updated_at: "t".to_string(),
+            ..Default::default()
+        };
+        // Real arriving after placeholder: merge placeholder → real.
+        let (out, repoint) =
+            plan_channel_merges(&[real.clone(), placeholder.clone()], &HashMap::new());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].channel_id, "UC123");
+        assert_eq!(repoint, vec![("@rust".to_string(), "UC123".to_string())]);
+
+        // Placeholder arriving after real: dropped, videos repointed to real.
+        let db: HashMap<String, String> = [("@rust".to_string(), "UC123".to_string())].into();
+        let (out, repoint) = plan_channel_merges(&[placeholder, real.clone()], &db);
+        assert!(out.is_empty());
+        assert_eq!(repoint, vec![("@rust".to_string(), "UC123".to_string())]);
+    }
+
+    #[test]
+    fn plan_no_merge_for_distinct_handles() {
+        let a = ChannelRow {
+            channel_id: "UCa".to_string(),
+            handle: Some("@a".to_string()),
+            title: "A".to_string(),
+            source: "rss".to_string(),
+            fetched_at: "t".to_string(),
+            updated_at: "t".to_string(),
+            ..Default::default()
+        };
+        let b = ChannelRow {
+            channel_id: "UCb".to_string(),
+            handle: Some("@b".to_string()),
+            title: "B".to_string(),
+            source: "rss".to_string(),
+            fetched_at: "t".to_string(),
+            updated_at: "t".to_string(),
+            ..Default::default()
+        };
+        let (out, repoint) = plan_channel_merges(&[a, b], &HashMap::new());
+        assert_eq!(out.len(), 2);
+        assert!(repoint.is_empty());
+    }
 }

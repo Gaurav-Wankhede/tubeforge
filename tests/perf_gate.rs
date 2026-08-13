@@ -69,7 +69,14 @@ const LIMIT_IDEAS: Duration = Duration::from_secs(5);
 const LIMIT_TOTAL: Duration = Duration::from_secs(30);
 
 const KEYWORDS: [&str; N_KEYWORDS] = [
-    "rust", "database", "sqlite", "tutorial", "guide", "performance", "storage", "indexing",
+    "rust",
+    "database",
+    "sqlite",
+    "tutorial",
+    "guide",
+    "performance",
+    "storage",
+    "indexing",
 ];
 
 // ---------------------------------------------------------------------------
@@ -104,7 +111,9 @@ impl Lcg {
 const ID_ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 fn video_id(rng: &mut Lcg) -> String {
-    (0..11).map(|_| ID_ALPHABET[rng.below(ID_ALPHABET.len() as u64) as usize] as char).collect()
+    (0..11)
+        .map(|_| ID_ALPHABET[rng.below(ID_ALPHABET.len() as u64) as usize] as char)
+        .collect()
 }
 
 fn channel_id(rng: &mut Lcg) -> String {
@@ -134,8 +143,22 @@ const TITLE_TEMPLATES: [&str; 10] = [
 /// Valid YouTube category ids (LLD §3.1 category map).
 const CATEGORIES: [&str; 10] = ["28", "27", "22", "24", "26", "2", "1", "20", "17", "23"];
 const TAG_POOL: [&str; 16] = [
-    "rust", "database", "sqlite", "tutorial", "guide", "performance", "backend", "storage",
-    "indexing", "transactions", "wal", "query", "engine", "beginner", "advanced", "programming",
+    "rust",
+    "database",
+    "sqlite",
+    "tutorial",
+    "guide",
+    "performance",
+    "backend",
+    "storage",
+    "indexing",
+    "transactions",
+    "wal",
+    "query",
+    "engine",
+    "beginner",
+    "advanced",
+    "programming",
 ];
 
 struct SynthDataset {
@@ -170,7 +193,11 @@ fn synth_dataset() -> SynthDataset {
             country: Some("US".to_string()),
             subscriber_count: Some(rng.below(2_000_000) as i64),
             video_count: Some(0),
-            source: if i == 0 { "api".to_string() } else { "rss".to_string() },
+            source: if i == 0 {
+                "api".to_string()
+            } else {
+                "rss".to_string()
+            },
             fetched_at: now.clone(),
             updated_at: now.clone(),
             ..Default::default()
@@ -216,7 +243,11 @@ fn synth_dataset() -> SynthDataset {
             like_count: Some((views / 13 + 5) as i64),
             comment_count: Some((views / 97 + 1) as i64),
             thumb_url: Some(format!("https://i.ytimg.com/vi/{id}/mqdefault.jpg")),
-            source: if rng.below(10) < 6 { "rss".to_string() } else { "api".to_string() },
+            source: if rng.below(10) < 6 {
+                "rss".to_string()
+            } else {
+                "api".to_string()
+            },
             fetched_at: now.clone(),
             updated_at: now.clone(),
             topic_categories: "[]".to_string(),
@@ -267,6 +298,11 @@ fn test_config(dir: &Path) -> Config {
         youtube_api_key: None,
         quota_warn_at: 90,
         chromium_dir: dir.join("chromium"),
+        ytdlp_path: "yt-dlp".into(),
+        ytdlp_enabled: false,
+        ytdlp_client: None,
+        ytdlp_js_runtime: None,
+        own_channel: None,
     }
 }
 
@@ -286,7 +322,11 @@ fn perf_dataset_is_unique_and_deterministic() {
 
     let mut seen = HashSet::with_capacity(a.videos.len());
     for v in &a.videos {
-        assert!(seen.insert(v.video_id.clone()), "duplicate video_id {}", v.video_id);
+        assert!(
+            seen.insert(v.video_id.clone()),
+            "duplicate video_id {}",
+            v.video_id
+        );
         assert_eq!(v.video_id.len(), 11, "realistic youtube id length");
         let cid = v.channel_id.as_deref().expect("every video has a channel");
         assert!(
@@ -299,7 +339,11 @@ fn perf_dataset_is_unique_and_deterministic() {
     assert_eq!(a.videos[0].video_id, b.videos[0].video_id);
     assert_eq!(a.videos[4999].title, b.videos[4999].title);
     let titles: HashSet<&str> = a.videos.iter().map(|v| v.title.as_str()).collect();
-    assert!(titles.len() > 100, "realistic title variety, got {}", titles.len());
+    assert!(
+        titles.len() > 100,
+        "realistic title variety, got {}",
+        titles.len()
+    );
     let rss = a.videos.iter().filter(|v| v.source == "rss").count();
     let api = a.videos.len() - rss;
     assert!(rss > 0 && api > 0, "rss/api source mix present");
@@ -322,7 +366,10 @@ async fn perf_gate_5k_videos_ingest_reindex_ideas_under_30s() {
     // Tracked keywords — seeded before the timed phases (the real flow runs
     // `keywords add` before `ideas`; scoring + ideas consume the list).
     db.add_keywords(
-        &KEYWORDS.iter().map(|s| s.to_string()).collect::<Vec<String>>(),
+        &KEYWORDS
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<String>>(),
         Some("database"),
     )
     .await
@@ -356,10 +403,9 @@ async fn perf_gate_5k_videos_ingest_reindex_ideas_under_30s() {
     let docs = to_docs(&ds.videos);
     let index = open_or_create(&cfg.index_dir()).expect("open index");
     {
-        let fields = index.schema();
-        let mut writer = index.writer(50_000_000).expect("index writer");
+        let mut writer = index.writer(50_000_000);
         for d in &docs {
-            tubeforge::search::index::upsert(&mut writer, &fields, d).expect("index upsert");
+            tubeforge::search::index::upsert(&mut writer, &tubeforge::search::Schema, d).expect("index upsert");
         }
         writer.commit().expect("index commit");
     }
@@ -418,15 +464,28 @@ async fn perf_gate_5k_videos_ingest_reindex_ideas_under_30s() {
     assert_eq!(bm25_num_docs(&cfg), N_VIDEOS, "index holds the corpus");
 
     // ---- The budgets ----------------------------------------------------
-    assert!(ingest < LIMIT_INGEST, "ingest {ingest:?} >= budget {LIMIT_INGEST:?}");
-    assert!(reindex < LIMIT_REINDEX, "reindex {reindex:?} >= budget {LIMIT_REINDEX:?}");
-    assert!(ideas < LIMIT_IDEAS, "ideas {ideas:?} >= budget {LIMIT_IDEAS:?}");
+    assert!(
+        ingest < LIMIT_INGEST,
+        "ingest {ingest:?} >= budget {LIMIT_INGEST:?}"
+    );
+    assert!(
+        reindex < LIMIT_REINDEX,
+        "reindex {reindex:?} >= budget {LIMIT_REINDEX:?}"
+    );
+    assert!(
+        ideas < LIMIT_IDEAS,
+        "ideas {ideas:?} >= budget {LIMIT_IDEAS:?}"
+    );
     assert!(
         total < LIMIT_TOTAL,
         "HARD GATE FAILED: total {total:?} >= 30s (LLD §12)"
     );
 
-    let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
     println!(
         "PERF GATE [{profile}] videos={N_VIDEOS} channels={N_CHANNELS} keywords={N_KEYWORDS} \
          ingest={:.2}s reindex={:.2}s ideas={:.2}s total={:.2}s \

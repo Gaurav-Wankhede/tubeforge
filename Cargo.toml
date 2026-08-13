@@ -11,7 +11,7 @@ repository = "https://github.com/<owner>/tubeforge"
 
 [dependencies]
 askama = "0.14"
-axum = { version = "0.8.9", default-features = false, features = ["tokio", "http1", "query"] }
+axum = { version = "0.8.9", default-features = false, features = ["tokio", "http1", "query", "json", "macros", "ws"] }
 chromiumoxide = { version = "0.9.1", features = ["fetcher"] }
 chromiumoxide_fetcher = "0.9.1"
 chrono = { version = "0.4.45", features = ["serde"] }
@@ -23,19 +23,20 @@ quick-xml = "0.41.0"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
-tantivy = "=0.26.1"
 thiserror = "2.0.19"
-tokio = { version = "=1.53.1", features = ["rt-multi-thread", "macros", "time", "net", "signal"] }
+tokio = { version = "=1.53.1", features = ["rt-multi-thread", "macros", "time", "net", "signal", "process", "fs"] }
 tracing = "0.1.44"
 tracing-subscriber = "0.3.23"
+tower-http = { version = "0.6", features = ["fs", "set-header"] }
 turso = "=0.7.2"
 url = "2.5.8"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+tempfile = "3.27.0"
 
 [dev-dependencies]
+proptest = "1.6.0"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "stream"] }
 rusqlite = { version = "=0.40.1", features = ["bundled"] }
-tempfile = "3.27.0"
 wiremock = "0.6.5"
 
 [profile.release]

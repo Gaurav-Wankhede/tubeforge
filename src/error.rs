@@ -17,6 +17,8 @@ pub enum Source {
     Rss,
     OEmbed,
     Api,
+    /// yt-dlp subprocess (transcript extraction — Phase 6/6.5).
+    Ytdlp,
 }
 
 impl fmt::Display for Source {
@@ -25,6 +27,7 @@ impl fmt::Display for Source {
             Source::Rss => write!(f, "rss"),
             Source::OEmbed => write!(f, "oembed"),
             Source::Api => write!(f, "youtube-api"),
+            Source::Ytdlp => write!(f, "yt-dlp"),
         }
     }
 }
@@ -33,13 +36,23 @@ impl fmt::Display for Source {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Endpoint {
     VideosList,
+    CommentThreads,
 }
 
 impl fmt::Display for Endpoint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Endpoint::VideosList => write!(f, "videos.list"),
+            Endpoint::CommentThreads => write!(f, "commentThreads.list"),
         }
+    }
+}
+
+/// Build an `Index` variant from a message string (used by the custom
+/// from-scratch search store; tantivy's typed errors no longer exist).
+pub fn index_err(detail: impl Into<String>) -> TubeforgeError {
+    TubeforgeError::Index {
+        detail: detail.into(),
     }
 }
 

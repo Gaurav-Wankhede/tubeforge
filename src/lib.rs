@@ -20,5 +20,9 @@ pub mod scoring;
 pub mod search;
 pub mod serve;
 pub mod storage;
+pub mod tfdb;
 pub mod thumbnail;
 pub mod util;
+
+// Re-export the flexible query API for convenience
+pub use analytics::query;

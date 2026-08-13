@@ -8,8 +8,8 @@
 
 use std::path::Path;
 
-use tantivy::doc;
 use tubeforge::search::new_index;
+use tubeforge::search::{Bm25, VideoDoc, FIELD_TITLE};
 use tubeforge::storage::backup::backup;
 use tubeforge::storage::Db;
 
@@ -24,7 +24,10 @@ async fn gate_crud_wal_transaction() {
     let mut db = Db::open(&db_path).await.expect("open db");
 
     assert_eq!(
-        db.journal_mode().await.expect("journal mode").to_ascii_lowercase(),
+        db.journal_mode()
+            .await
+            .expect("journal mode")
+            .to_ascii_lowercase(),
         "wal",
         "journal mode must be WAL (ADR-5)"
     );
@@ -40,11 +43,7 @@ async fn gate_crud_wal_transaction() {
 
     // Commit a transaction.
     {
-        let tx = db
-            .conn
-            .transaction()
-            .await
-            .expect("begin tx");
+        let tx = db.conn.transaction().await.expect("begin tx");
         tx.execute("INSERT INTO t (v) VALUES ('b')", ())
             .await
             .expect("insert in tx");
@@ -53,11 +52,7 @@ async fn gate_crud_wal_transaction() {
 
     // Roll a transaction back; rows must be absent afterwards.
     {
-        let tx = db
-            .conn
-            .transaction()
-            .await
-            .expect("begin tx");
+        let tx = db.conn.transaction().await.expect("begin tx");
         tx.execute("INSERT INTO t (v) VALUES ('doomed')", ())
             .await
             .expect("insert doomed");
@@ -66,11 +61,7 @@ async fn gate_crud_wal_transaction() {
 
     // Commit a third transaction.
     {
-        let tx = db
-            .conn
-            .transaction()
-            .await
-            .expect("begin tx");
+        let tx = db.conn.transaction().await.expect("begin tx");
         tx.execute("INSERT INTO t (v) VALUES ('c')", ())
             .await
             .expect("insert c");
@@ -78,7 +69,10 @@ async fn gate_crud_wal_transaction() {
     }
 
     let count = db.count("SELECT count(*) FROM t").await.expect("count");
-    assert_eq!(count, 3, "committed rows only (2 + 1), rolled back row absent");
+    assert_eq!(
+        count, 3,
+        "committed rows only (2 + 1), rolled back row absent"
+    );
 
     db.integrity_check().await.expect("integrity_check ok");
 }
@@ -113,13 +107,21 @@ async fn gate_backup_roundtrip() {
     let snapshot = backup(&db, &backup_dir, 10).await.expect("backup");
     assert!(snapshot.exists(), "snapshot file exists");
     assert!(
-        snapshot.file_name().unwrap().to_str().unwrap().starts_with("tubeforge-"),
+        snapshot
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("tubeforge-"),
         "snapshot naming: tubeforge-<ts>.db"
     );
 
     // Open the snapshot and verify parity + integrity.
     let snap = Db::open(&snapshot).await.expect("open snapshot");
-    let count = snap.count("SELECT count(*) FROM t").await.expect("snapshot count");
+    let count = snap
+        .count("SELECT count(*) FROM t")
+        .await
+        .expect("snapshot count");
     assert_eq!(count, N, "snapshot has all rows");
     snap.integrity_check().await.expect("snapshot integrity ok");
 
@@ -236,13 +238,19 @@ async fn gate_fts_probe() {
     eprintln!("fts probe [1/4] CREATE INDEX USING fts        -> {create_outcome}");
 
     if create_fts.is_err() {
-        eprintln!("fts probe RESULT: FTS unavailable in turso 0.7.2 (probe passes: {create_outcome})");
+        eprintln!(
+            "fts probe RESULT: FTS unavailable in turso 0.7.2 (probe passes: {create_outcome})"
+        );
         eprintln!("fts probe CONFIRMS: tantivy-direct BM25 decision stands (LLD §13 item 3)");
         return;
     }
 
     // 2. Insert three rows with different term frequencies.
-    for (id, title) in [(1, "rust database guide"), (2, "rust rust rust database"), (3, "python web")] {
+    for (id, title) in [
+        (1, "rust database guide"),
+        (2, "rust rust rust database"),
+        (3, "python web"),
+    ] {
         conn.execute(
             "INSERT INTO docs (id, title, body) VALUES (?1, ?2, ?3)",
             vec![
@@ -268,8 +276,14 @@ async fn gate_fts_probe() {
         Ok(mut rows) => {
             let mut order = Vec::new();
             while let Some(row) = rows.next().await.expect("next") {
-                let id = row.get_value(0).map(|v| format!("{v:?}")).unwrap_or_default();
-                let s = row.get_value(1).map(|v| format!("{v:?}")).unwrap_or_default();
+                let id = row
+                    .get_value(0)
+                    .map(|v| format!("{v:?}"))
+                    .unwrap_or_default();
+                let s = row
+                    .get_value(1)
+                    .map(|v| format!("{v:?}"))
+                    .unwrap_or_default();
                 order.push(format!("({id}, {s})"));
             }
             eprintln!("fts probe [2/4] fts_match+ORDER BY fts_score -> rows in order: {order:?}");
@@ -305,7 +319,10 @@ async fn gate_fts_probe() {
 
     // 5. Full scan sanity (is the index physically usable at all?).
     let scan = conn
-        .query("SELECT count(*) FROM docs WHERE fts_match(docs_fts, 'rust')", ())
+        .query(
+            "SELECT count(*) FROM docs WHERE fts_match(docs_fts, 'rust')",
+            (),
+        )
         .await;
     match scan {
         Ok(mut rows) => {
@@ -327,7 +344,7 @@ async fn gate_fts_probe() {
 }
 
 // ---------------------------------------------------------------------------
-// 5. tantivy compiles/pins + positive BM25 score
+// 5. custom index compiles/pins + positive BM25 score
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -338,34 +355,23 @@ fn gate_tantivy_compiles() {
     let _index = new_index(&dir.path().join("index")).expect("new_index");
 
     // Re-open the same directory (persistence + reader path).
-    let index = tantivy::Index::open_in_dir(dir.path().join("index")).expect("reopen index");
+    let index = tubeforge::search::open_or_create(&dir.path().join("index")).expect("reopen index");
 
-    let schema = index.schema();
-    let title = schema.get_field("title").expect("title field");
-    let video_id = schema.get_field("video_id").expect("video_id field");
-
-    let mut writer = index.writer(50_000_000).expect("writer");
+    let mut writer = index.writer(50_000_000);
     writer
-        .add_document(tantivy::doc![
-            title => "tubeforge phase zero gate rust database",
-            video_id => "7lCDEYXw3mM",
-        ])
+        .add_document(VideoDoc {
+            video_id: "7lCDEYXw3mM".to_string(),
+            title: "tubeforge phase zero gate rust database".to_string(),
+            ..Default::default()
+        })
         .expect("add doc");
     writer.commit().expect("commit");
 
-    let reader = index.reader().expect("reader");
-    reader.reload().expect("reload");
-    let searcher = reader.searcher();
-    let parser = tantivy::query::QueryParser::for_index(&index, vec![title]);
-    let query = parser.parse_query("database").expect("parse");
-    let collector = tantivy::collector::TopDocs::with_limit(10).order_by_score();
-    let hits = searcher.search(&query, &collector).expect("search");
-    assert_eq!(hits.len(), 1, "exactly one matching doc");
-    let (score, _) = hits[0];
+    let bm25 = Bm25::open(index).expect("bm25");
+    let score = bm25.corpus_resonance(FIELD_TITLE, "database", None);
     assert!(score > 0.0, "BM25 score > 0, got {score}");
 
     // Non-matching query yields nothing (sanity on the ranking path).
-    let miss = parser.parse_query("nonexistentterm").expect("parse miss");
-    let miss_hits = searcher.search(&miss, &collector).expect("search miss");
-    assert_eq!(miss_hits.len(), 0, "no hits for non-matching term");
+    let miss = bm25.corpus_resonance(FIELD_TITLE, "nonexistentterm", None);
+    assert_eq!(miss, 0.0, "no hits for non-matching term");
 }

@@ -1,37 +1,46 @@
 //! BM25 query construction + score retrieval (LLD §3.2 query surface).
 //!
-//! Phase 1 basic mode: `corpus_resonance` answers "how well does this text
-//! (title) rank against the corpus in field X" — the raw BM25 maximum over
-//! matching docs, excluding the video itself when scoring a stored video.
-//! The full weighted keyword engine arrives in Phase 2.
+//! Implemented on the from-scratch inverted index (`store::Store`), replacing
+//! tantivy. `corpus_resonance` answers "how well does this text rank against
+//! the corpus in field X" — the raw BM25 maximum over matching docs, excluding
+//! the video itself when scoring a stored video. `matches` returns every
+//! matching (video_id, score) pair best-first.
 
-use tantivy::collector::TopDocs;
-use tantivy::query::QueryParser;
-use tantivy::schema::Field;
-use tantivy::{Index, IndexReader, Searcher};
+use std::sync::{Arc, RwLock};
 
-use crate::error::TubeforgeError;
+use super::index::Index;
+use super::store::{field_from_name, FieldName, Store};
+use crate::error::{index_err, TubeforgeError};
 
-/// BM25 access over a single tantivy index (cheap to open; Reader reloads
-/// between ingest batches).
+/// BM25 access over a single index (cheap to open; `reload` re-reads the
+/// snapshot between ingest batches).
 pub struct Bm25 {
-    index: Index,
-    reader: IndexReader,
+    store: Arc<RwLock<Store>>,
+    path: Arc<std::path::Path>,
 }
 
 /// Reasonable upper bound for corpus scans: the index tops out at ~10k docs
-/// in v1 (HLD §10), so collecting all hits and taking the max is fine.
+/// in v1 (HLD §10), so a linear scan + max is fine.
 const COLLECT_LIMIT: usize = 10_000;
 
 impl Bm25 {
     pub fn open(index: Index) -> Result<Self, TubeforgeError> {
-        let reader = index.reader().map_err(index_err)?;
-        Ok(Bm25 { index, reader })
+        Ok(Bm25 {
+            store: index.store_handle(),
+            path: index.path_handle(),
+        })
     }
 
-    /// Refresh the reader after an ingest batch committed new segments.
+    /// Re-read the snapshot from disk so a just-committed ingest batch is
+    /// visible (mirrors tantivy's `reader.reload()`).
     pub fn reload(&mut self) -> Result<(), TubeforgeError> {
-        self.reader.reload().map_err(index_err)
+        let loaded = Store::load(&self.path.join(super::store::Store::file_name()))?;
+        let mut s = self
+            .store
+            .write()
+            .map_err(|e| index_err(format!("index lock poisoned: {e}")))?;
+        *s = loaded;
+        Ok(())
     }
 
     /// Raw BM25 of `query` over `field_name`, excluding `exclude_video_id`
@@ -43,36 +52,17 @@ impl Bm25 {
         query: &str,
         exclude_video_id: Option<&str>,
     ) -> f64 {
-        if query.trim().is_empty() {
+        let Some(field) = field_from_name(field_name) else {
             return 0.0;
-        }
-        let schema = self.index.schema();
-        let field = match schema.get_field(field_name) {
-            Ok(f) => f,
-            Err(_) => return 0.0,
         };
-        let parsed = match QueryParser::for_index(&self.index, vec![field]).parse_query(query) {
-            Ok(q) => q,
-            Err(_) => return 0.0,
-        };
-
-        let searcher = self.reader.searcher();
-        let hits = match searcher.search(
-            &parsed,
-            &TopDocs::with_limit(COLLECT_LIMIT).order_by_score(),
-        ) {
-            Ok(h) => h,
-            Err(_) => return 0.0,
-        };
-
-        let video_id_field = schema.get_field(crate::search::index::FIELD_VIDEO_ID).ok();
+        let s = self.store.read().unwrap_or_else(|p| p.into_inner());
+        let top = s.matches(field, query);
+        // Respect the collection cap: only scan the top COLLECT_LIMIT hits.
         let mut best = 0.0f32;
-        for (score, addr) in hits {
-            if let Some(vf) = video_id_field {
-                if let Some(exclude) = exclude_video_id {
-                    if doc_video_id(&searcher, vf, addr).as_deref() == Some(exclude) {
-                        continue;
-                    }
+        for (id, score) in top.into_iter().take(COLLECT_LIMIT) {
+            if let Some(exclude) = exclude_video_id {
+                if id == exclude {
+                    continue;
                 }
             }
             best = best.max(score);
@@ -82,46 +72,25 @@ impl Bm25 {
 
     /// All docs matching `query` in `field_name` with their BM25 scores.
     pub fn matches(&self, field_name: &str, query: &str) -> Vec<(String, f32)> {
-        let schema = self.index.schema();
-        let field = match schema.get_field(field_name) {
-            Ok(f) => f,
-            Err(_) => return Vec::new(),
-        };
-        let parsed = match QueryParser::for_index(&self.index, vec![field]).parse_query(query) {
-            Ok(q) => q,
-            Err(_) => return Vec::new(),
-        };
-        let searcher = self.reader.searcher();
-        let Ok(hits) = searcher.search(
-            &parsed,
-            &TopDocs::with_limit(COLLECT_LIMIT).order_by_score(),
-        ) else {
+        let Some(field) = field_from_name(field_name) else {
             return Vec::new();
         };
-        let video_id_field = schema.get_field(crate::search::index::FIELD_VIDEO_ID).ok();
-        hits.into_iter()
-            .map(|(score, addr)| {
-                let id = video_id_field
-                    .and_then(|vf| doc_video_id(&searcher, vf, addr))
-                    .unwrap_or_default();
-                (id, score)
-            })
-            .collect()
+        let s = self.store.read().unwrap_or_else(|p| p.into_inner());
+        s.matches(field, query).into_iter().take(COLLECT_LIMIT).collect()
     }
 
     pub fn num_docs(&self) -> u64 {
-        self.reader.searcher().num_docs()
+        let s = self.store.read().unwrap_or_else(|p| p.into_inner());
+        s.num_docs()
     }
 }
 
-fn doc_video_id(searcher: &Searcher, field: Field, addr: tantivy::DocAddress) -> Option<String> {
-    use tantivy::schema::document::Value;
-    let doc: tantivy::TantivyDocument = searcher.doc(addr).ok()?;
-    doc.get_first(field)
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
+/// Resolve a field name for tests/external use.
+pub fn resolve_field(name: &str) -> Option<FieldName> {
+    field_from_name(name)
 }
 
-fn index_err(e: tantivy::TantivyError) -> TubeforgeError {
-    TubeforgeError::Index { detail: e.to_string() }
+/// Parse a query into its token set (public for tests).
+pub fn query_terms(query: &str) -> Vec<String> {
+    super::store::tokenize(query)
 }
