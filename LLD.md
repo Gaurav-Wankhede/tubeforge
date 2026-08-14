@@ -1,21 +1,23 @@
 # TubeForge — Low-Level Design (LLD)
 
 **Project:** TubeForge — local-first YouTube SEO/GEO growth engine
-**Document version:** 1.5 | **Date:** August 4, 2026
-**Status:** Approved — Phases 0–3 delivered; implementation reference for Phase 4+ (Phase 4 in progress)
-**Companion documents:** `PRD.md` (v3.14), `HLD.md`
+**Document version:** 1.6 | **Date:** August 14, 2026
+**Status:** Approved — Phases 0–6 delivered; implementation reference for Phase 4+ (release hardening)
+**Companion documents:** `PRD.md` (v4.0), `HLD.md` (v1.3)
+
+> **v1.6 update (Aug 14, 2026):** sections updated for the engine-independence re-architecture — `tfdb` storage (custom `.wal`+`.dat`, no SQLite/rusqlite), from-scratch BM25 (`src/search`), raw-Hyper web framework + WebSocket JSON-RPC + SSE (`src/serve`), content/`analyze` layer, 18 SEO components, SCHEMA_VERSION 9. Phase 0 gate records the superseded v3 stack for reference.
 
 ---
 
 ## 1. Scope
 
-This document specifies: module layout, data model (SQL schema + tantivy index spec), CLI contracts (commands, JSON envelope, exit codes, error taxonomy), fetch-layer design (RSS/oEmbed/API + quota), ingest pipeline semantics, scoring engine formulas, analytics modules, backup/recovery flows, concurrency model, configuration keys, migration/versioning, and the testing strategy.
+This document specifies: module layout, data model (`tfdb` schema + own BM25 index spec), CLI contracts (commands, JSON envelope, exit codes, error taxonomy), fetch-layer design (RSS/oEmbed/API + quota), ingest pipeline semantics, scoring engine formulas, analytics modules, backup/recovery flows, concurrency model, configuration keys, migration/versioning, and the testing strategy.
 
-**Grounding constraints (locked, evidence-backed):**
-- Engine: Turso Database, **WAL mode only**, pinned release. No Turso FTS/vector index modules. (HLD §7, §11)
-- BM25: tantivy crate, owned by TubeForge. Vector: brute-force cosine in Rust. Graph: Rust PageRank.
-- Backup before every batch ingest; rusqlite escape hatch.
-- CLI-only v1; `--json` envelope; external MCP via `tursodb --mcp`.
+**Grounding constraints (locked, evidence-backed, v1.6):**
+- Engine: **`tfdb`** — from-scratch embedded store, custom `.wal` + `.dat` format. **Not** SQLite-compatible; no rusqlite escape hatch. Single-writer. (HLD §7, ADR-1)
+- BM25: **TubeForge's own engine** (`src/search`, `k1=1.2, b=0.75`). Vector: HNSW module ships but is unwired (no embeddings). Graph: Rust PageRank + Louvain.
+- Backup before every batch ingest (snapshot copy + integrity re-open).
+- CLI-first v1; `--json` envelope; **stdio JSON-RPC** via `tubeforge rpc` (same method surface as `/ws`) for agent harnesses; WebSocket JSON-RPC + SSE via `serve`.
 
 ---
 
@@ -23,9 +25,10 @@ This document specifies: module layout, data model (SQL schema + tantivy index s
 
 ```
 tubeforge/
-├── Cargo.toml                  # bin `tubeforge`; deps: turso, tantivy, tokio, clap,
-│                               #   reqwest (rustls, NOT native-tls), quick-xml, serde,
-│                               #   dotenvy, tracing, chrono, chrono-tz, url, thiserror
+├── Cargo.toml                  # bin `tubeforge`; deps: hyper/hyper-util (raw-Hyper server),
+│                               #   tokio, clap, reqwest (rustls, NOT native-tls), quick-xml,
+│                               #   serde, serde_json, dotenvy, tracing, chrono, chrono-tz, url,
+│                               #   thiserror, askama, chromiumoxide + fetcher, zip, tokio-tungstenite
 ├── .env.example
 ├── src/
 │   ├── main.rs                 # tokio runtime, clap dispatch → exit(code)
@@ -38,38 +41,61 @@ tubeforge/
 │   │   ├── rss.rs              # feed fetch + parse (quick-xml)
 │   │   ├── oembed.rs           # single-video metadata
 │   │   ├── api.rs              # YouTube Data API v3 client (videos.list batching)
-│   │   └── quota.rs            # per-endpoint budget ledger (persisted in meta table)
+│   │   ├── quota.rs            # per-endpoint budget ledger (persisted in meta table)
+│   │   └── ytdlp.rs            # transcripts (auto/manual subs→WebVTT→text), comments, heatmap, SERP research (opt-in)
 │   ├── ingest.rs               # resolution, ID extraction, dedupe, upsert orchestration
 │   ├── categories.rs           # YouTube category map (32 ids → names)
+│   ├── tfdb/                   # from-scratch storage engine (pure Rust)
+│   │   ├── mod.rs              # Engine, EngineOptions, Tx, Value; file layout (.wal/.dat)
+│   │   ├── store.rs            # WAL append + fsync-on-commit, atomic checkpoint, replay, torn-tail truncation
+│   │   ├── schema.rs           # Col/TableSchema (typed columns, no SQL DDL)
+│   │   ├── query.rs            # sum/avg/min/max/group_counts/join scans
+│   │   ├── tfdb_schema.rs      # 22 table definitions
+│   │   ├── graph.rs            # property graph (typed nodes/edges)
+│   │   └── hnsw.rs             # HNSW vector index (SHIPS, UNWIRED — no embeddings)
 │   ├── storage/
-│   │   ├── mod.rs              # Db trait (Turso impl + rusqlite impl behind feature)
-│   │   ├── db.rs               # Turso connection, repository methods
-│   │   ├── schema.rs           # embedded schema.sql + migrations
-│   │   └── backup.rs           # VACUUM INTO, integrity_check, retention, restore
+│   │   ├── db.rs               # Db facade (Arc<Mutex<Engine>> + path); re-exports db_tf.rs
+│   │   ├── db_tf.rs            # repository methods over tfdb engine
+│   │   ├── schema.rs           # SCHEMA_VERSION + migration runner (version-gated)
+│   │   └── backup.rs           # snapshot copy + integrity re-open + retention, restore
 │   ├── search/
-│   │   ├── mod.rs
-│   │   ├── index.rs            # tantivy IndexWriter/Reader lifecycle, rebuild
-│   │   └── bm25.rs             # query construction, score retrieval
+│   │   ├── mod.rs              # own BM25 engine (only module importing it)
+│   │   ├── index.rs            # Index (Arc<RwLock<Store>>) + IndexWriter commit, rebuild
+│   │   ├── store.rs            # in-memory inverted index → atomic checksummed index.json snapshot
+│   │   └── bm25.rs             # BM25 scoring (k1=1.2, b=0.75), matches, corpus_resonance
 │   ├── scoring/
-│   │   ├── mod.rs
-│   │   ├── seo.rs              # structural + BM25-derived SEO components
-│   │   ├── geo.rs              # free-signal GEO components
+│   │   ├── mod.rs              # compute / compute_with_graph entry points
+│   │   ├── seo.rs              # 18 SEO components (10 structural + 5 vidIQ + 3 graph)
+│   │   ├── geo.rs              # 7 free-signal GEO components
+│   │   ├── psych.rs            # packaging-psychology TitleFormula + variants (supporting)
+│   │   ├── graph_aware.rs      # compute_graph_scores (tag_authority/topic_dominance/keyword_competition)
+│   │   ├── recommend.rs        # recommendation checklist
 │   │   └── weights.rs          # weight config (defaults + .env overrides)
 │   ├── analytics/
 │   │   ├── mod.rs
-│   │   ├── graph.rs            # competitor adjacency + PageRank
+│   │   ├── graph.rs            # channel adjacency + PageRank/Louvain helpers
 │   │   ├── ideas.rs            # Next Ideas generation + ranking
 │   │   ├── keywords.rs         # rank tracking snapshots
-│   │   ├── reports.rs          # scorecard, health, alerts
+│   │   ├── growth.rs           # own-channel overview + keyword opportunities + next-video recs
+│   │   ├── content.rs          # deterministic content draft generation (title/desc/tags)
+│   │   ├── forecast.rs         # weighted OLS growth forecasting from channel_snapshots
+│   │   ├── kg_builder.rs       # KG build (Full/Incremental) + load_or_build cache
+│   │   ├── kg_algorithms.rs    # PageRank + Louvain over the graph
+│   │   └── reports.rs          # scorecard, health, alerts
 │   ├── thumbnail/
 │   │   ├── mod.rs              # template fill, render orchestration (chromiumoxide)
 │   │   ├── render.rs           # CDP render → PNG 1280×720
 │   │   └── assets.rs           # per-render temp dir + RAII cleanup guard
 │   ├── export/
-│   │   ├── mod.rs              # manifest.json + JSON arrays
+│   │   ├── mod.rs              # manifest.json + JSON arrays + zip/dir output
 │   │   └── csv.rs              # videos/channels/tags/keywords CSV writers (escaping)
-│   ├── serve/                  # HTMX dashboard server (PRD §5.4, delivered)
-│   │   ├── mod.rs              # axum router, handlers, health/pages endpoints
+│   ├── serve/                  # dashboard server (PRD §5.4, v1.6 re-architecture)
+│   │   ├── mod.rs              # loopback-only server bootstrap + routing
+│   │   ├── web.rs              # raw-Hyper web framework (State/Query/Path/Headers extractors)
+│   │   ├── api.rs              # HTTP API handlers under /api/*
+│   │   ├── api/analysis.rs     # /api/analysis/* handlers
+│   │   ├── rpc.rs              # JSON-RPC dispatch + handlers (transport-agnostic; shared by /ws and stdio)
+│   │   ├── stdio.rs            # stdio JSON-RPC bridge (`tubeforge rpc`) — line-delimited stdin/stdout
 │   │   ├── csrf.rs             # Origin/Referer CSRF guard for POSTs
 │   │   ├── svg.rs              # server-rendered inline SVG charts (bars/histogram/sparklines)
 │   │   └── templates.rs        # askama template types (compile-time autoescaping)
@@ -80,174 +106,80 @@ tubeforge/
 │   │                           #   idea_row.html, keywords.html, scorecard.html, alerts.html,
 │   │                           #   alerts_list.html, health.html, macros.html, not_found.html
 │   ├── static/                 # vendored assets (offline, no CDN)
-│   │   └── htmx.min.js         # htmx 2.0.9 (pinned, source URL documented in header)
+│   │   ├── htmx.min.js         # htmx 2.0.9 (legacy HTMX pages; retained)
+│   │   └── sse.js              # SSE EventSource client helper (current dashboard path)
 │   └── commands/               # one file per CLI subcommand
-│       ├── init.rs ingest.rs score.rs ideas.rs keywords.rs
-│       ├── scorecard.rs health.rs alerts.rs backup.rs quota.rs reindex.rs
-│       ├── thumbnail.rs availability.rs export.rs filmot.rs serve.rs
+│       ├── init.rs ingest.rs refresh.rs score.rs ideas.rs keywords.rs
+│       ├── tags.rs transcript.rs metadata.rs comments.rs gaps.rs outliers.rs
+│       ├── scorecard.rs health.rs analyze.rs forecast.rs suggest.rs alerts.rs
+│       ├── backup.rs quota.rs reindex.rs rpc.rs thumbnail.rs availability.rs
+│       ├── videos.rs export.rs filmot.rs prompt.rs serve.rs
 └── tests/
     ├── fixtures/               # local HTTP server (wiremock) RSS/oEmbed/API payloads
     └── *.rs                    # integration + property tests (incl. serve.rs — dashboard HTTP suite)
 ```
 
-**Dependency rule:** `commands` → domain modules → `storage`/`search` (leaf). `storage` is the only module importing `turso`; `search` is the only module importing `tantivy`.
+**Dependency rule:** `commands` → domain modules → `storage`/`tfdb` + `search` (leaf). `storage`/`tfdb` is the only storage engine; `search` is the only BM25 module. No SQL engine, no external index/web framework.
 
 ---
 
 ## 3. Data Model
 
-### 3.1 SQL schema (Turso, WAL mode)
+### 3.1 `tfdb` schema (from-scratch engine, SCHEMA_VERSION = 9)
 
-```sql
-PRAGMA journal_mode = WAL;
-PRAGMA user_version = 3;   -- managed by migrations (SCHEMA_VERSION = 3)
+Storage is a **typed-row key/value model** (`src/tfdb/schema.rs`): each table has a fixed `TableSchema` with `Col { name, ColType }`; rows are `BTreeMap<String, Value>`; composite keys are folded into a single primary-key string (e.g. `keyword\x1fchecked_at`, `from\x1fto`); auto-increment ids are assigned in Rust. **No SQL DDL.** The conceptual tables (22 — see PRD §15) include:
 
-CREATE TABLE channels (
-  channel_id        TEXT PRIMARY KEY,      -- UC...  (or handle-resolved id)
-  handle            TEXT UNIQUE,           -- @name
-  title             TEXT NOT NULL,
-  description       TEXT,
-  avatar_url        TEXT,
-  country           TEXT,
-  subscriber_count  INTEGER,               -- api only
-  video_count       INTEGER,               -- api only
-  source            TEXT NOT NULL DEFAULT 'rss',  -- rss | api
-  etag              TEXT,                  -- rss caching
-  fetched_at        TEXT NOT NULL,         -- ISO8601 UTC
-  updated_at        TEXT NOT NULL
-);
-
-CREATE TABLE videos (
-  video_id      TEXT PRIMARY KEY,          -- 11-char id
-  channel_id    TEXT REFERENCES channels(channel_id) ON DELETE SET NULL,
-                                            -- NULLABLE: oEmbed-sourced links have
-                                            -- no channel_id; store @handle-keyed
-                                            -- placeholder channel when known
-  title         TEXT NOT NULL,
-  description   TEXT NOT NULL DEFAULT '',
-  tags          TEXT NOT NULL DEFAULT '[]',   -- JSON array (api only)
-  category_id   TEXT,
-  duration_sec  INTEGER,
-  published_at  TEXT NOT NULL,             -- ISO8601 UTC
-  view_count    INTEGER,
-  like_count    INTEGER,
-  comment_count INTEGER,
-  recording_date        TEXT,              -- api only (recordingDetails.date)
-  recording_location_name TEXT,            -- api only (recordingDetails.location)
-  recording_lat         REAL,              -- api only
-  recording_lng         REAL,              -- api only
-  topic_categories      TEXT NOT NULL DEFAULT '[]',  -- JSON array (api only, topicDetails)
-  thumb_url     TEXT,
-  embedding     BLOB,                      -- RESERVED: semantic embeddings;
-                                           --   unused in v1 (lexical-only), so
-                                           --   adding them later = no migration
-  source        TEXT NOT NULL DEFAULT 'rss',  -- rss | oembed | api
-  privacy_status TEXT,                        -- public | unlisted | private (api only, migration 003)
-  fetched_at    TEXT NOT NULL,
-  updated_at    TEXT NOT NULL
-);
-CREATE INDEX idx_videos_channel      ON videos(channel_id);
-CREATE INDEX idx_videos_published    ON videos(published_at DESC);
-CREATE INDEX idx_videos_channel_pub  ON videos(channel_id, published_at DESC);
-CREATE TABLE competitors (
-  channel_id  TEXT PRIMARY KEY REFERENCES channels(channel_id) ON DELETE CASCADE,
-  label       TEXT,                          -- display name / grouping
-  added_at    TEXT NOT NULL
-);
-
-CREATE TABLE keywords (
-  keyword     TEXT PRIMARY KEY,
-  niche       TEXT,
-  created_at  TEXT NOT NULL
-);
-
-CREATE TABLE keyword_rankings (              -- snapshot per check
-  keyword     TEXT NOT NULL REFERENCES keywords(keyword) ON DELETE CASCADE,
-  checked_at  TEXT NOT NULL,
-  video_id    TEXT REFERENCES videos(video_id) ON DELETE SET NULL,
-  position    INTEGER,                       -- NULL = not found
-  topics      TEXT,                          -- JSON (api only): topic categories at check time
-  PRIMARY KEY (keyword, checked_at)
-);
-
-CREATE TABLE scores (
-  video_id     TEXT PRIMARY KEY REFERENCES videos(video_id) ON DELETE CASCADE,
-  seo_score    REAL NOT NULL,                -- 0..100
-  geo_score    REAL NOT NULL,                -- 0..100
-  total_score  REAL NOT NULL,                -- weighted composite 0..100
-  components   TEXT NOT NULL,                -- JSON breakdown (per-signal values)
-  computed_at  TEXT NOT NULL
-);
-CREATE INDEX idx_scores_total ON scores(total_score DESC);
-
-CREATE TABLE ideas (
-  idea_id        INTEGER PRIMARY KEY AUTOINCREMENT,
-  title_suggestion TEXT NOT NULL,
-  rationale      TEXT NOT NULL,              -- JSON: signals that fired
-  score          REAL NOT NULL,
-  status         TEXT NOT NULL DEFAULT 'draft',  -- draft | saved | discarded
-  source_video   TEXT REFERENCES videos(video_id) ON DELETE SET NULL,
-  created_at     TEXT NOT NULL
-);
-
-CREATE TABLE edges (                          -- competitor graph
-  from_channel TEXT NOT NULL REFERENCES channels(channel_id) ON DELETE CASCADE,
-  to_channel   TEXT NOT NULL REFERENCES channels(channel_id) ON DELETE CASCADE,
-  weight       REAL NOT NULL DEFAULT 1.0,
-  source       TEXT NOT NULL,                -- overlap | manual
-  PRIMARY KEY (from_channel, to_channel)
-);
-
-CREATE TABLE alerts (
-  alert_id   INTEGER PRIMARY KEY AUTOINCREMENT,
-  kind       TEXT NOT NULL,                  -- brand | gap | quota | integrity
-  channel_id TEXT REFERENCES channels(channel_id) ON DELETE CASCADE,
-  message    TEXT NOT NULL,
-  severity   TEXT NOT NULL DEFAULT 'info',   -- info | warn | critical
-  created_at TEXT NOT NULL,
-  read_at    TEXT
-);
-
-CREATE TABLE ingest_log (
-  batch_id   TEXT NOT NULL,
-  item       TEXT NOT NULL,                  -- channel id / video id / url
-  status     TEXT NOT NULL,                  -- ok | skipped | failed
-  detail     TEXT,
-  at         TEXT NOT NULL
-);
-CREATE INDEX idx_ingest_log_batch ON ingest_log(batch_id);
-
-CREATE TABLE meta (                           -- key/value store
-  key   TEXT PRIMARY KEY,
-  value TEXT NOT NULL
-);
--- keys: schema_version, quota_videos_list_used, quota_videos_list_date,
---       last_backup_at, last_reindex_at, settings_json
+```text
+channels          (channel_id PK, handle UNIQUE, title, description, avatar_url, country,
+                   subscriber_count, video_count, source rss|api, etag, fetched_at, updated_at)
+videos            (video_id PK, channel_id, title, description, tags JSON[], category_id,
+                   duration_sec, published_at, view_count, like_count, comment_count,
+                   recording_date, recording_location_name, recording_lat, recording_lng,
+                   topic_categories JSON[], thumb_url, embedding BLOB [unused — lexical only],
+                   source rss|oembed|api, privacy_status, fetched_at, updated_at)
+competitors       (channel_id PK, label, added_at)
+keywords          (keyword PK, niche, created_at)
+keyword_rankings  (keyword\x1fchecked_at PK, video_id, position [NULL = not found], topics JSON)
+scores            (video_id PK, seo_score, geo_score, total_score, components JSON, computed_at)
+ideas             (idea_id autoincrement, title_suggestion, rationale JSON, score, status
+                   draft|saved|discarded, source_video, created_at)
+edges             (from_channel\x1fto_channel PK, weight, source overlap|manual)   -- competitor graph
+alerts            (alert_id autoincrement, kind brand|gap|quota|integrity, channel_id, message,
+                   severity info|warn|critical, created_at, read_at)
+ingest_log        (batch_id\x1fseq PK, item, status ok|skipped|failed, detail, at)
+tags / video_tags / competitor_tags   -- tag entities + membership
+transcripts       (video_id, lang, source, text, word_count)    -- yt-dlp captions
+comments          (video_id, ...)                               -- yt-dlp comments (opt-in)
+video_heatmap     (video_id, ...)                               -- yt-dlp live stats/heatmap
+channel_snapshots (channel_id, subscribers, video_count, total_views, at)   -- growth history
+keyword_research  (topic, ...)                                  -- analyze/SERP research
+kg_entities       (entity_id, entity_type, canonical_name, display_name, properties JSON,
+                   embedding BLOB [unused], centrality, community_id, source, source_ref)
+kg_relations      (from, to, relation_type, weight, source)     -- weighted graph edges
+kg_communities    (community_id, community_type, summary, member_count, mean_views,
+                   mean_seo_score, top_entities)
+meta              (key PK, value)  -- schema_version, quota_*, last_backup_at, last_reindex_at,
+                                    -- settings_json, kg_cache_json
 ```
 
-### 3.2 tantivy index spec
+### 3.2 Own BM25 index spec (`src/search`)
 
-- **Location:** `<data>/index/` (rebuildable — not part of backups).
-- **Schema fields:**
-  - `video_id` (STRING, STORED)
-  - `channel_id` (STRING, STORED)
-  - `title` (TEXT, indexed, tokenized, stored)
-  - `description` (TEXT, indexed, tokenized)
-  - `tags` (TEXT, indexed, tokenized — joined)
-  - `published_at` (DATE, indexed)
+- **Location:** `<data>/index/index.json` (atomic, checksummed snapshot; rebuildable — not part of backups).
+- **Schema fields:** `video_id`, `channel_id`, `title`, `description`, `tags` (joined), `published_at` (3 tokenized/queryable: title/desc/tags).
+- **Tokenizer:** lowercase + split on non-alphanumeric.
+- **BM25:** `k1=1.2`, `b=0.75`, field-specific doc-length normalization; `COLLECT_LIMIT = 10_000`.
 - **Query surface (bm25.rs):**
-  - `score_title(q)` — BM25 over `title`
-  - `score_desc(q)` — BM25 over `description`
-  - `score_tags(q)` — BM25 over `tags`
-  - `top_similar(video_id, n)` — combined field query, exclude self
-- **Lifecycle:** `IndexWriter` per ingest batch (add/delete by `video_id`), commit; `Reader` reload for scoring queries. Full rebuild = truncate dir + re-index from `videos` table (idempotent — recovery path for any index inconsistency).
+  - `matches(q)` — best-first `(video_id, f32)`
+  - `corpus_resonance(q, self_exclude?)` — max BM25 across corpus (optionally self-excluding a video)
+  - `has_term`, `terms`, `num_docs`
+- **Lifecycle:** `IndexWriter` accumulates upserts per ingest batch, `commit` persists atomically; full rebuild = drop snapshot + re-index from `videos` (idempotent — recovery path for any index inconsistency). `reindex` command.
 
 ### 3.3 Rationale notes
 
-- **No FTS virtual table** — Turso's FTS5 `MATCH` is unsupported and Turso FTS is beta (HLD §7.2). tantivy owns all text ranking.
-- **Embeddings column: reserved, unused in v1.** Cosine similarity operates on token-overlap vectors (title/tags) — *lexical* similarity (ADR-9, user-locked Aug 3 2026). Semantic embeddings can be added later **without any schema change** (the `embedding` BLOB column already exists in the schema).
-- **`meta` schema_version** drives migrations (section 9). **SCHEMA_VERSION = 3** (migration 003, Phase 3): adds `videos.privacy_status` (public/unlisted/private, api only); version-gated idempotent, 001/002 unchanged.
-- **Ingest idempotency:** `video_id` PK → upsert semantics (see 5.3).
+- **No external index engine** — tantivy and engine FTS were removed (ADR-2); BM25 is TubeForge-owned (`src/search`).
+- **Embeddings column: reserved, unused in v1.** Lexical-only (ADR-9); HNSW module ships but no embeddings are generated. Semantic embeddings can be added later **without a schema change** (the `embedding` BLOB columns already exist on `videos` and `kg_entities`).
+- **`meta.schema_version`** drives migrations (section 9). **SCHEMA_VERSION = 9**.
+- **Ingest idempotency:** `video_id` PK → upsert semantics (see 6.2).
 
 ---
 
@@ -269,13 +201,24 @@ CREATE TABLE meta (                           -- key/value store
 | `alerts [--mark-read]` | Brand/coverage alerts | `--json` |
 | `backup` | VACUUM INTO + integrity_check + retention prune | `--to <dir>` |
 | `quota` | Show YouTube API usage | `--json` |
-| `reindex` | Rebuild tantivy from `videos` | — |
+| `reindex` | Rebuild own BM25 index from `videos` | — |
 | `thumbnail render` | Render template → 1280×720 PNG; raw assets in per-render temp dir, deleted after success (RAII guard; `--keep-assets` debug-only) | `--template`, `--title`, `--output`, `--keep-assets`, `--json` |
 | `thumbnail list-templates` | List available HTML+Tailwind templates | `--json` |
 | `check availability` | Batched `videos.list` (part=snippet,status); missing IDs → `video_unavailable` alerts; records `privacy_status` | `--json` |
 | `export` | Export DB to `--format zip\|dir`: manifest.json, videos.csv (19 cols), channels.csv, tags.csv, keywords.csv, keyword_rankings.csv + JSON arrays (videos, ideas, alerts, scores); deterministic zip archives | `--format`, `--output`, `--json` |
 | `filmot get` | Opt-in recovery lookup via Filmot API (`TUBEFORGE_FILMOT_KEY`); raw JSON passthrough + tolerant summary; no DB writes; non-fatal. Empty key → exit 1 CONFIG error | `--video-id`, `--json` |
-| `serve` | HTMX dashboard (PRD §5.4, delivered): bind loopback, serve until Ctrl-C. **Long-running — does NOT emit the JSON envelope; stdout stays empty** (listening line → stderr; `--json` ignored). One shared Db; single-writer caveat — do not run concurrently with writing CLI commands (WAL readers fine) | `--port` (default 8080; `TUBEFORGE_SERVE_PORT` overrides), `--host` (loopback only: `127.0.0.1`/`localhost`/`::1`; non-loopback → rejected, exit 2) |
+| `analyze <topic>` | Realtime yt-dlp SERP research → demand-supply gap + auto-drafted title/desc/tags (content::generate) + ranking chart + packaging | `--json` |
+| `forecast` | Growth forecast from `channel_snapshots` (weighted OLS + recency half-life) | `--horizon`, `--channels`, `--json` |
+| `suggest <topic>` | Next-video recommendations (forecast-ranked, excludes covered topics, view-prediction tier + "why") | `--json` |
+| `tags backfill\|analyze` | Backfill tag entities; analyze tag coverage/gaps | `--json` |
+| `transcript get\|list\|clear` | yt-dlp caption extraction (auto/manual subs → WebVTT→text) → `transcripts` table | `--json` |
+| `metadata` | Video heatmap / live stats via yt-dlp | `--json` |
+| `comments get\|list\|clear` | yt-dlp comment extraction (opt-in) → `comments` table | `--json` |
+| `gaps [--channel]` / `gaps outliers` | Content/tag gap analysis (incl. graph gaps when KG built) | `--channel`, `--markdown`, `--json` |
+| `videos dedupe` | Detect/merge duplicate videos | `--json` |
+| `rpc` | Stdio JSON-RPC bridge for agent harnesses (OpenCode, Claude Code, Codex, Hermes, Pi Agent): reads one request per stdin line, streams responses to stdout. **Long-running — stdout reserved for responses; never emits the JSON envelope.** Same method surface as `/ws` | — |
+| `prompt` | Print agent/usage prompt | — |
+| `serve` | Dashboard (PRD §5.4, v1.6): raw-Hyper web framework + WebSocket JSON-RPC (`/ws`) + SSE (`/events`), bind loopback, serve until Ctrl-C. **Long-running — does NOT emit the JSON envelope; stdout stays empty** (listening line → stderr; `--json` ignored). One shared Db; single-writer caveat — do not run concurrently with writing CLI commands (snapshot readers fine) | `--port` (default 8080; `TUBEFORGE_SERVE_PORT` overrides), `--host` (loopback only: `127.0.0.1`/`localhost`/`::1`; non-loopback → rejected, exit 2) |
 
 Global: `--json`, `--verbose`, `--db-path`, `--config <env file>`.
 
@@ -315,38 +258,57 @@ enum TubeforgeError {
   Quota { endpoint: Endpoint, remaining: u64 },
   Storage { code: String, message: String },   // engine error passthrough
   Integrity { detail: String },               // → exit 5
-  Index { detail: String },                   // tantivy errors
+  Index { detail: String },                   // BM25 index errors
   Usage(String),                              // → exit 2
 }
 ```
 Mapping: `From<TubeforgeError> for i32` centralizes exit codes. Errors always render in the JSON envelope under `error`, and human mode prints `code: message` on stderr.
 
-### 4.5 HTMX Dashboard (`serve` — PRD §5.4, delivered Aug 4, 2026)
+### 4.5 Dashboard (`serve` — PRD §5.4, delivered; re-architected Aug 14, 2026)
 
-**Stack:** Axum 0.8.9 (tokio) + askama 0.14 templates (compile-time autoescaping) + vendored htmx 2.0.9. Charts are server-rendered inline SVG from Rust (`serve/svg.rs`) — **no JS chart libraries** (PRD §11 resolved).
+**Stack:** **raw-Hyper web framework** (`serve/web.rs` — plain `(Method, PathPattern) -> handler`, extractors `State/Query/Path/Headers/ReqUri`, `{param}` path segments, built on hyper/hyper-util; **no Axum**) + askama 0.14 templates (compile-time autoescaping) + **WebSocket JSON-RPC** (`serve/rpc.rs`) + **SSE** (`serve.rs::events`). Charts are server-rendered inline SVG from Rust (`serve/svg.rs`) — **no JS chart libraries** (PRD §11 resolved).
 
-**Routes** (single router in `serve/mod.rs`):
+**HTTP API + RPC surface** (mounted under `/api/`; full list in PRD §5.4/§13):
 
 | Path | Content |
 |---|---|
-| `/` | Dashboard home — health cards + Server-Sent Events (no polling) counts + SVG charts |
-| `GET /events` | SSE stream (text/event-stream): immediate `counts` event on connect, 5s change-detection tick, 15s `: ping` heartbeat |
-| `/scores` | Scores list; `/scores/{id}` drilldown fragment — 17-component breakdown via hx-get expand |
-| `/ideas` | Idea rows; `/ideas/{id}/{status}` hx-post → outerHTML swap (draft/saved/discarded) |
-| `/alerts` | Alert list; `/alerts/read`, `/alerts/clear` POSTs |
-| `/keywords` | Rank trends per keyword + SVG sparklines |
-| `/scorecard` | Competitor scorecard table |
-| `/health` | Health report page (census etc.) |
-| `/healthz` | Plain `ok` (no envelope, no HTML) — liveness probe |
-| `/static/htmx.min.js` | Vendored htmx 2.0.9, offline (no CDN) |
+| `/` | Dashboard home — health cards + SSE counts + SVG charts |
+| `GET /events` | SSE stream (`text/event-stream`): `counts` event on change every 5s, 15s `: ping` heartbeat |
+| `WS /ws` | WebSocket JSON-RPC — envelope `{id, method, params}`; out `progress {id, progress, message}` → `result {id, data}` \| `error {id, error:{code,message}}` \| `notification {event, data}`. ~21 methods (dashboard.overview, ideas.analyze, keywords.*, scores.*, videos.*, scorecard.get, health.get, gaps.*, tags.*, analysis.*, alerts.*, audit.get, channels.snapshots). Errors `-32700` parse / `-32603` internal. `RuntimeScorer` recomputes SEO+GEO fresh from the BM25 index; `analysis.refresh` does live yt-dlp fetch on a dedicated std thread |
+| `GET /api/healthz` | Plain `ok` — liveness probe |
+| `GET /api/health` | Health report page/census |
+| `/api/scores` `/api/scores/{id}` | Scores list + component drilldown (18 SEO + 7 GEO + graph_scores) |
+| `/api/ideas/analyze`, `/api/keywords*`, `/api/scorecard`, `/api/audit`, `/api/gaps*`, `/api/transcripts`, `/api/comments`, `/api/tags*`, `/api/analysis/*`, `/api/channels/{id}/snapshots` | Dashboard datasets |
+| `/static/htmx.min.js` | Vendored htmx 2.0.9 (legacy HTMX pages; offline, no CDN) |
+| `/static/sse.js` | Vendored SSE EventSource client helper (current dashboard path) |
 
 **CSRF policy** (`serve/csrf.rs`): loopback server has no auth — remaining risk is local CSRF (malicious webpage POSTing to `127.0.0.1:<port>`). Origin guard on POSTs: `Origin`/`Referer` host:port must match the bound address (`localhost` ≡ `127.0.0.1`; scheme http/https) → mismatch or unparseable (`Origin: null`) → **403**. Neither header present → allowed (curl/scripts/AI agents send no Origin and can't be browser-CSRF'd).
 
-**Concurrency (single-writer caveat):** `serve` opens ONE shared Db (axum state) and mutates only via existing CLI repository methods (`set_idea_statuses`, `mark_alerts_read`, `clear_alerts`) — no duplicated write logic. Running `serve` concurrently with writing CLI commands is **unsupported**; concurrent readers fine (WAL).
+**Concurrency (single-writer caveat):** `serve` opens ONE shared Db (app state) and mutates only via existing CLI repository methods (`set_idea_statuses`, `mark_alerts_read`, `clear_alerts`) — no duplicated write logic. Running `serve` concurrently with writing CLI commands is **unsupported**; concurrent readers fine (snapshot/in-memory reads).
 
 **stdout purity:** `serve` is long-running and never emits the JSON envelope (LLD §4.2 applies to one-shot commands); stdout stays empty (smoke-verified 0 bytes), listening line → stderr. `--json` global flag is ignored for `serve` (documented in `cli.rs` help).
 
 **Loopback enforcement:** bind host checked at startup — `127.0.0.1`/`localhost`/`::1` only; any other host → usage error, exit 2. Port precedence: `--port` flag > `TUBEFORGE_SERVE_PORT` env > 8080.
+
+### 4.6 Stdio JSON-RPC bridge (`rpc` — agent-harness connection, PRD §5.9/§13)
+
+**Purpose:** agent harnesses (OpenCode, Claude Code, Codex, Hermes, Pi Agent, ...) connect to TubeForge for **analysis** via JSON-RPC over **stdio** — not a separate network server, not MCP, not the `prompt` command. The tfdb database is the storage source; the frontend dashboard provides visual analysis.
+
+**Design:** `serve/stdio.rs` — one transport task wraps `stdout`, the shared `serve::rpc::dispatch` handles methods. It reuses the exact WebSocket method surface, so the protocol is **one JSON-RPC interface, two transports** (`/ws` for the dashboard, stdio for agents).
+
+**Contract (line-delimited):**
+```
+stdout-of-binary input  →  {"id":"r1","method":"scores.list","params":{}}
+binary stdout          →  {"id":"r1","type":"progress","progress":0.2,"message":"..."}
+binary stdout          →  {"id":"r1","type":"result","data":{...}}
+parse error            →  {"id":null,"type":"error","error":{"code":-32700,"message":"..."}}
+unknown method         →  {"id":"r1","type":"error","error":{"code":-32603,"message":"..."}}
+```
+
+- **stdout purity:** stdout carries **only** one JSON-RPC response per line (flushed per message); all diagnostics/logs go to stderr. Like `serve`, it never emits the LLD §4.2 JSON envelope.
+- **Concurrency:** single-writer Db shared with `serve`; `dispatch` is sequential per request. Do not run `rpc` concurrently with writing CLI commands.
+- **Lifecycle:** runs until stdin EOF → exit 0. Special-cased in `main.rs` (`run_rpc`), bypassing the envelope pipeline.
+- **Tests:** `agent_contract_stdio_rpc` (spawns `tubeforge rpc`, writes requests, asserts clean JSON responses + error codes on stdout, exit 0 on EOF).
 
 ---
 
@@ -402,13 +364,13 @@ Mapping: `From<TubeforgeError> for i32` centralizes exit codes. Errors always re
 - Source precedence on conflict: `api` > `oembed` > `rss` (rich data wins; never downgrade).
 - oEmbed carries no publish date → `videos.published_at` = ingest time for oEmbed-sourced rows (documented limitation, LLD §5.2).
 
-### 6.3 Transaction + ordering rules (Turso constraint)
-- **One write statement active per connection** (Turso returns `SQLITE_BUSY` otherwise — COMPAT.md). Pipeline is strictly sequential: fetch-all → single transaction → single writer. Reads between writes are fine.
+### 6.3 Transaction + ordering rules (`tfdb` constraint)
+- **Single writer, single transaction.** `tfdb` serializes writers with one write lock; pipeline is strictly sequential: fetch-all → single transaction (`begin`→`Tx` → `commit` writes one WAL record + fsync) → single writer. Reads from the in-memory snapshot are fine between writes.
 - Entire batch in one transaction; on any failure → rollback, log failed items to `ingest_log`, exit 1.
-- **Backup guard:** automatic `backup` (VACUUM INTO + integrity_check) before every batch write unless `--no-backup`. Integrity failure → abort with exit 5 (never write into a corrupt DB).
+- **Backup guard:** automatic `backup` (snapshot copy + integrity re-open) before every batch write unless `--no-backup`. Integrity failure → abort with exit 5 (never write into a corrupt DB).
 
 ### 6.4 Post-ingest
-- tantivy: delete stale docs for updated videos + add new (one writer commit).
+- BM25: delete stale docs for updated videos + add new (one `IndexWriter.commit`).
 - Scoring: recompute `scores` only for changed/inserted videos.
 - `ingest_log` rows per item; summary counts → output.
 
@@ -421,9 +383,11 @@ Mapping: `From<TubeforgeError> for i32` centralizes exit codes. Errors always re
 Inputs: title, description, tags[], channel context, target keywords (optional)
 Signals → components → weighted total (0–100) → components JSON persisted
 ```
-> **Phase 2 status (Aug 4, 2026):** full engine delivered — 10 SEO + 7 GEO components (incl. C1/C2 `location_signal` / `topic_relevance`), k-scaled formulas, baked defaults + env overrides; Phase 1 BASIC mode superseded.
+> **Phase 2 status (Aug 4, 2026):** 10 SEO + 7 GEO components (incl. C1/C2 `location_signal` / `topic_relevance`), k-scaled formulas, baked defaults + env overrides; Phase 1 BASIC mode superseded. **Phase 6.6 update (Aug 14, 2026):** extended to **18 SEO components** (5 vidIQ/Phase-6.6 + 3 graph) + **packaging-psychology** supporting layer. Entry points: `compute`, `compute_with_meta`, `compute_with_graph` (`src/scoring`).
 
-### 7.2 SEO components (default weights; override via env)
+### 7.2 SEO components (default weights; override via env) — 18 total
+
+**Structural (10, from Phase 2):**
 
 | Component | Signal(s) | Formula sketch (v1, deterministic) |
 |---|---|---|
@@ -436,8 +400,33 @@ Signals → components → weighted total (0–100) → components JSON persiste
 | `desc_structure` | newlines, bullets, hashtags, ≥2 lines | checklist score |
 | `tags_relevance` | tags ∩ (title+desc) tokens | Jaccard/TF overlap × 100 |
 | `tags_quality` | count in [3,8], order matches content | checklist |
+| `keyword_tags` | target keyword present among tags | 100/60/0 |
 
-### 7.3 GEO components (free signals only — no paid API)
+**vidIQ / Phase-6.6 (5):**
+
+| Component | Signal(s) | Formula sketch |
+|---|---|---|
+| `title_40_chars` | first 40 chars readability (mobile truncation) | checklist |
+| `desc_first2lines` | keyword + hook in first 2 desc lines | checklist |
+| `desc_length` | description length target band | piecewise |
+| `hashtag_count` | hashtag count target band | piecewise |
+| `keyword_triple` | keyword in title+desc+tags (triple presence) | boolean-ish |
+
+**Graph (3, via `graph_scores` — from Knowledge Graph):**
+
+| Component | Signal(s) | Formula sketch |
+|---|---|---|
+| `tag_authority` | mean authority of video's tags weighted by channel centrality | `Σ(tag_authority_i) / n` |
+| `topic_dominance` | max dominance across title tokens for the video's channel | `max(dom_i)` |
+| `keyword_competition` | max channel dominance over the keyword's edges (high = competitive) | `max(dom_edge)` |
+
+> **Note:** `SEo_COMPONENT_KEYS` surfaced via API/RPC carries the **15** non-graph components; the 3 graph components flow separately through `graph_scores`. Runtime fresh scores with graph=None produce graph components = 0; stored scores via `compute_with_graph` persist the full 18. Component-count inconsistency is a known documented surface (PRD §10, R6).
+
+### 7.3 Packaging-psychology (supporting, NOT blended into totals)
+
+`psych.rs` — five `TitleFormula` patterns, `score() = 20 pts/detected formula capped 100`: `TimeAnchor`, `PreciseNumber` (+extreme-outcome bonus), `IncomeClaim`, `ForbiddenKnowledge`, `HowToIdentity`. `variants()` generates Martell/Hormozi-style titles.
+
+### 7.4 GEO components (free signals only — no paid API)
 
 | Component | Signal | Formula sketch (v1, deterministic) | Rationale |
 |---|---|---|---|
@@ -449,14 +438,14 @@ Signals → components → weighted total (0–100) → components JSON persiste
 | `location_signal` | `recordingDetails` lat/lng or location name (C1, api only) | `70` when lat/lng or location name present; `+30` when `recordingDate` within ±7 days of `publishedAt` | Geographic grounding matches localized answer engines |
 | `topic_relevance` | `topicDetails.topicCategories` vs target keyword (C2, api only) | last URL segment, `_`→space; `Jaccard(keyword tokens) × 100` | Topic taxonomy matches query intent |
 
-### 7.4 Composite
+### 7.5 Composite
 ```
 total = (seo_weight * seo_total + geo_weight * geo_total) / (seo_weight + geo_weight)
 seo_total = Σ(w_i * comp_i) / Σ w_i ; geo_total likewise
 ```
-Weights: `TUBEFORGE_WEIGHTS_SEO`, `TUBEFORGE_WEIGHTS_GEO`, `TUBEFORGE_SEO_*`, `TUBEFORGE_GEO_*` env keys; defaults baked (each component set sums 1.0 — 10 SEO, 7 GEO); new C1/C2 signals via `TUBEFORGE_GEO_LOCATION_SIGNAL` / `TUBEFORGE_GEO_TOPIC_RELEVANCE`; `settings_json` overrides.
+Weights: `TUBEFORGE_WEIGHTS_SEO`, `TUBEFORGE_WEIGHTS_GEO`, `TUBEFORGE_SEO_*`, `TUBEFORGE_GEO_*` env keys; defaults baked (each component set sums 1.0 — SEO set now 18, GEO set 7); C1/C2 signals via `TUBEFORGE_GEO_LOCATION_SIGNAL` / `TUBEFORGE_GEO_TOPIC_RELEVANCE`; `settings_json` overrides.
 
-### 7.5 Output (persisted `scores.components`)
+### 7.6 Output (persisted `scores.components`)
 ```json
 { "keyword_title": 82, "title_front": 100, "title_length": 90,
   "keyword_desc": 55, "desc_first150": 100, "tags_relevance": 74,
@@ -479,12 +468,23 @@ Weights: `TUBEFORGE_WEIGHTS_SEO`, `TUBEFORGE_WEIGHTS_GEO`, `TUBEFORGE_SEO_*`, `T
 
 ### 8.3 Keyword Rank Tracking (`analytics/keywords.rs`)
 - `keywords check`: for each keyword, BM25 over corpus → top video + position → snapshot into `keyword_rankings` (position NULL when below threshold); snapshots carry `topics` JSON (topic categories at check time, migration 002).
-- Ranks report: trend per keyword across snapshots (CLI table; `lag/lead` unavailable in Turso — compute deltas in Rust).
+- Ranks report: trend per keyword across snapshots (CLI table; deltas computed in Rust — no SQL window functions).
 
 ### 8.4 Reports (`analytics/reports.rs`)
-- **scorecard:** per channel vs median of competitors: views growth proxy (rss views), title patterns, tag overlap, centrality, SEO score distribution. `--json` for agents.
-- **health:** rows counts, last ingest, quota state, integrity_check result, stale channels (>N days), index freshness.
-- **alerts:** rules — quota exhausted, integrity failure, brand keyword absent from competitor top titles, stale channel, new competitor detected.
+- **scorecard:** per channel vs median of competitors: views growth proxy (rss views), title patterns, tag overlap, PageRank centrality, Louvain community, SEO score distribution. `--json` for agents.
+- **health:** rows counts, last ingest, quota state, integrity re-open result, stale channels (>N days), index freshness, `privacy` census.
+- **alerts:** rules — quota exhausted, integrity failure, brand keyword absent from competitor top titles, stale channel, new competitor detected, `video_unavailable`.
+
+### 8.5 Growth & Content (`analytics/growth.rs`, `content.rs`, `forecast.rs`)
+- **`growth.rs`:** own-channel overview (`own_overview`), keyword opportunities (forecast-ranked chart-ready series), next-video recommendations (`next_video_recommendations` — excludes covered topics, auto-drafts packaging, view-prediction tier + "why"). Consumed by `analysis.*` RPC + API.
+- **`content.rs`:** deterministic `generate(DraftInput) -> ContentDraft` — keyword-first title (≤55 chars, Title Doctrine, no emoji), SEO-shaped description, ≤12 tags.
+- **`forecast.rs`:** weighted OLS on elapsed time with recency half-life (30d); `MIN_POINTS=3`; t-stat ±2.0 significance gate; `TREND_THRESHOLD_PCT=10%` → Rising/Flat/Falling; LOW/MEDIUM/HIGH reliability; `next_estimate`, `slope_per_day`, `r_squared`. Fed by `channel_snapshots`.
+
+### 8.6 Knowledge Graph (`kg_builder.rs`, `kg_algorithms.rs`, `graph_aware.rs`)
+- **Build:** reads videos/channels/keywords/edges/keyword_rankings → 6 entity types (Video, Channel, Tag, Keyword, Topic, Entity), 9 relation types (tags, created_by, about_topic, competes_in, dominates, related_to, similar_to, mentioned_in, contains). Weighted edges (tag `1/(1+pos)`, keyword `1/(1+position)`); Jaccard tag co-occurrence ≥2. `BuildMode::Full` (clears KG tables) or `Incremental`.
+- **Algorithms:** Louvain community detection + PageRank centrality (`kg_algorithms.rs`).
+- **Load:** `load_or_build()` checks `meta.kg_cache_json`; on miss full-rebuilds then `load_from_db`. Lazy-loaded in `serve.rs` via double-checked locking, cached for server lifetime; graceful degradation to `null`.
+- **Consumers:** `graph_aware::compute_graph_scores` (tag_authority/topic_dominance/keyword_competition), `generate_graph_ideas`, `find_content_gaps`, `compute_tag_authority_by_name`; `graph.rs` lightweight channel-graph helpers (`tag_authority_scores`, `topic_dominance_scores`, `build_kw_channel_graph`).
 
 ---
 
@@ -493,29 +493,29 @@ Weights: `TUBEFORGE_WEIGHTS_SEO`, `TUBEFORGE_WEIGHTS_GEO`, `TUBEFORGE_SEO_*`, `T
 ### 9.1 Backup (locked policy)
 ```
 backup:
-  VACUUM INTO backups/tubeforge-<ts>.db      -- consistent snapshot, single file
-  PRAGMA integrity_check → exit 5 on failure
+  copy <db>.dat → backups/tubeforge-<ts>.db     -- standalone tfdb checkpoint (self-contained)
+  reopen the copy with Db::open (integrity)     → exit 5 on failure
   prune: keep last N (TUBEFORGE_BACKUP_KEEP, default 10)
 ```
-- Auto-run before every batch ingest (guard). tantivy index NOT backed up (rebuild via `reindex`).
+- Auto-run before every batch ingest (guard). BM25 index NOT backed up (rebuild via `reindex`).
 
 ### 9.2 Recovery
 - Restore: point `TUBEFORGE_DB_PATH` at backup or copy over main; then `reindex`.
-- Escape hatch: same `.db` opens in rusqlite/SQLite (COMPAT guarantee #1) — CI test enforces.
+- **No SQLite escape hatch** (ADR-1) — backup checkpoints are self-contained `tfdb` snapshots; integrity verified by re-open.
 
 ### 9.3 Migrations
-- `meta.schema_version` (mirrors `PRAGMA user_version`); ordered migration list in `storage/schema.rs`; each migration runs in one transaction; version bump persisted. `init`/open applies pending migrations.
-- Migration 001 (full v1 schema) is marked **idempotent and always applied** — Phase 0-era DBs (meta-only) gain the full schema in place without a version bump (their recorded v1 is retained). This is the documented Phase 0→v1 upgrade path.
-- Migration 002 (Phase 2, SCHEMA_VERSION 1→2): adds `videos.recording_date` / `recording_location_name` / `recording_lat` / `recording_lng` / `topic_categories` (JSON) and `keyword_rankings.topics` (JSON); idempotent via version gating — 001 untouched, 002 never re-runs after the bump.
-- Migration 003 (Phase 3, SCHEMA_VERSION 2→3): adds `videos.privacy_status` TEXT (public/unlisted/private, api only, from `check availability`); idempotent via version gating — 001/002 untouched, 003 never re-runs after the bump.
-- Rule: migrations never depend on experimental Turso features.
+- `meta.schema_version`; ordered migration list in `storage/schema.rs`; each migration runs in one transaction; version bump persisted. `init`/open applies pending migrations. **SCHEMA_VERSION = 9.**
+- Migration 001 (full v1 schema) is **idempotent and always applied** — Phase 0-era DBs gain the full schema in place without a version bump (their recorded v1 is retained).
+- Migration 002 (Phase 2, 1→2): adds recording-date/location/lat/lng + `topic_categories` (JSON) and `keyword_rankings.topics` (JSON); version-gated.
+- Migration 003 (Phase 3, 2→3): adds `videos.privacy_status` TEXT; version-gated.
+- Migrations 004–009 (Phase 6): transcripts/comments/video_heatmap/channel_snapshots/keyword_research + kg_entities/kg_relations/kg_communities + tag tables → **SCHEMA_VERSION 9**; version-gated idempotent.
 
 ---
 
 ## 10. Concurrency & Async Model
 
-- **tokio** runtime (network). Storage calls are **synchronous** (Turso crate): issue from `spawn_blocking` or between await points; never hold a DB guard across an await. (Turso API is async — use its async API directly; sequential awaits, single writer.)
-- Strictly **one writer** at a time: CLI process model makes this trivially true; no daemon. `serve` (dashboard) holds one shared read/write connection — see §4.5 single-writer caveat (never run it concurrently with writing CLI commands; WAL readers fine).
+- **tokio** runtime (network). Storage calls are **synchronous** (`tfdb` engine is sync; the `Db` facade exposes async for legacy call-site parity). Issue blocking engine work via `spawn_blocking` or between await points; never hold a DB guard across an await.
+- Strictly **one writer** at a time: `tfdb` serializes writers with a single write lock; CLI process model makes this trivially true; no daemon. `serve` (dashboard) holds one shared Db — see §4.5 single-writer caveat (never run it concurrently with writing CLI commands; snapshot/in-memory readers fine).
 - Retries (network only): 3× exponential backoff with jitter; idempotent by design (PK upserts).
 - Cancellation: Ctrl-C → abort between phases; transaction rollback protects; next run re-enters safely (ingest_log + PKs).
 
@@ -526,7 +526,7 @@ backup:
 | Key | Default | Purpose |
 |---|---|---|
 | `YOUTUBE_API_KEY` | *(empty)* | Optional API key; empty = RSS/oEmbed only |
-| `TUBEFORGE_DB_PATH` | `~/.tubeforge/tubeforge.db` | DB file |
+| `TUBEFORGE_DB_PATH` | `~/.tubeforge/tubeforge.db` | DB base path → produces `<path>.wal` + `<path>.dat` |
 | `TUBEFORGE_DATA_DIR` | `~/.tubeforge/` | index/, backups/ root |
 | `TUBEFORGE_BACKUP_DIR` | `<data>/backups` | Snapshot location |
 | `TUBEFORGE_BACKUP_KEEP` | `10` | Retention |
@@ -551,8 +551,8 @@ backup:
 |---|---|
 | Unit | ID extraction regexes, scoring formulas (golden vectors), quota math, weight parsing, PageRank on toy graphs, JSON envelope shape, **ID checksum tables (bare video/channel regexes), extended URL-form parsing (`/v/ /embed/ /shorts/ /video/ /watch/ /live/`, playlist prefixes, `@handle`/`/user/`/`/c/`), `SC→UC` channel transform, category lookup (32 ids), disabled-vs-unknown metric heuristic, location/topic golden vectors, thumbnail template fill, asset-cleanup RAII (temp dir removed on success + error path), CSV escaping (quotes/commas/newlines), Filmot tolerant parse (missing fields/keys)** |
 | Integration (wiremock fixture server) | RSS parse from fixture feed; oEmbed; API batching ≤50 ids; ETag 304 path; quota 403 → fallback |
-| Storage | upsert idempotency, source precedence, migration v0→v1, **v1→v2 idempotency (version-gated re-run)**, **v2→v3 idempotency (privacy_status, version-gated re-run)**, **backup round-trip: ingest → backup → restore → integrity_check == ok** |
-| Compatibility | open `.db` via rusqlite (escape hatch) — CI every build |
+| Storage (`tfdb`) | upsert idempotency, source precedence, WAL replay + torn-tail truncation, atomic checkpoint, fsync-on-commit durability, migration idempotency (version-gated re-run), **backup round-trip: ingest → backup → restore → integrity re-open == ok**, property tests (dedupe fuzz, ingest idempotency) |
+| Compatibility | **no SQLite escape hatch** (ADR-1) — removed; backup round-trip integrity via `Db::open` re-open on the snapshot copy |
 | Agent contract (`tests/agent_contract.rs`, binary-level) | 11 tests: every command's `--json` → single JSON object on stdout only; no ANSI codes; tracing on stderr only; envelope `ok/data/meta` + `error` shapes |
 | Property | dedupe fuzz (random URL sets), ingest idempotency (run twice → same state) |
 | Performance smoke | 5k videos ingest + reindex + top-k ideas < 30s on M4 (gate) — **✅ PASSED (Aug 4, 2026, M4, release profile)**: ingest 20.22s / reindex 0.20s / ideas 0.06s / total 20.49s vs 30s budget (per-phase budgets ingest<25 reindex<10 ideas<5). Run: `cargo test --release --test perf_gate -- --ignored --nocapture`. Scaling finding: post-ingest scoring is the dominant cost, ~4ms/video at 5k corpus (`tests/perf_gate.rs`) |
@@ -564,31 +564,30 @@ backup:
 
 ---
 
-## 13. Phase 0 Gate (must pass before feature work)
+## 13. Phase 0 Gate (superseded — records the v3 stack)
 
-**STATUS: ✅ PASSED — August 3, 2026 (turso `=0.7.2`, tantivy `=0.26.1`, macOS arm64/M4)**
+**STATUS: ✅ PASSED — August 3, 2026 (turso `=0.7.2`, tantivy `=0.26.1`, macOS arm64/M4). Superseded by the v4.0 engine-independence re-architecture (ADR-1/2): Turso/SQLite and tantivy were replaced by `tfdb` + own BM25 (Phase 6, Aug 14 2026). Kept for provenance.**
 
 | # | Item | Result |
 |---|---|---|
 | 1 | turso pinned; CRUD + WAL + transaction + `integrity_check` | ✅ PASS |
 | 2 | `VACUUM INTO` + restore round-trip passes `integrity_check` | ✅ PASS (25/25 rows; retention prune verified) |
-| 3 | FTS probe (`fts_match`/`fts_score`) | ✅ CONFIRMED — `CREATE INDEX … USING fts` is a **hard syntax error** in 0.7.2 (not merely wrong ranking). Engine FTS unavailable → tantivy-direct confirmed as the only path |
-| 4 | rusqlite opens the same `.db` | ✅ PASS — main WAL-mode db opened directly (no snapshot fallback needed) |
+| 3 | FTS probe (`fts_match`/`fts_score`) | ✅ CONFIRMED — `CREATE INDEX … USING fts` is a **hard syntax error** in 0.7.2. Engine FTS unavailable → tantivy-direct (now own-BM25) confirmed as the only path |
+| 4 | rusqlite opens the same `.db` | ✅ PASS (v3 stack) — removed in v4.0 |
 | 5 | CLI skeleton `init`/`ingest links`/`backup`/`quota`, JSON envelope + exit codes | ✅ PASS (exit 0/1/2 verified; `--json` envelope shapes verified) |
 
-**Engine API notes (turso 0.7.2 — recorded for Phase 1+):**
-- `Builder::new_local(path).experimental_vacuum(true).experimental_index_method(true).build().await` → `connect()` → `Connection`. **`VACUUM INTO` requires `experimental_vacuum(true)`.**
-- Params: heterogeneous tuples via the `params!` macro work (Phase 0 note that only homogeneous `Vec<T: IntoValue>` was supported is **outdated** — verified in Phase 1); transactions: `transaction()` + `commit()`/`rollback()` (no savepoints).
-- Row-returning PRAGMAs (`journal_mode`, `user_version` reads) must go through `query`, not `execute`; the SET form `PRAGMA user_version = 1` returns no rows and must be `execute`d.
-- Backups: turso creates an (empty) `-wal` companion when opening snapshots; the `.db` alone remains complete and portable (rusqlite-verified standalone).
+**Current storage engine (`tfdb`, v4.0):**
+- File layout: `<path>.wal` (append-only, CRC32-checksummed transaction log) + `<path>.dat` (latest atomic checkpoint snapshot). Magics `TFWL`/`TFDT`; rows serialized via deterministic serde_json.
+- Durability: `begin`→`Tx` stages in memory; `commit` writes one WAL record + `fsync` (default on) then applies to the live snapshot; crash replays WAL and truncates any torn tail; `checkpoint()` writes the full snapshot via temp-file + `rename` (atomic) then truncates the WAL.
+- `EngineOptions.fsync_on_commit` (default true) controls the fsync; single write lock serializes writers.
 
 ---
 
 ## 14. Open Items (LLD level)
 
 1. ~~SEO/GEO weights & formula final values (needs user's scoring spec — PRD §5.2).~~ → **Resolved (Aug 4, 2026):** documented defaults baked in (10 SEO + 7 GEO components, each set sums 1.0); tunable via `TUBEFORGE_SEO_*` / `TUBEFORGE_GEO_*`.
-2. ~~tantivy + turso exact version pins~~ → **Resolved at gate:** turso `=0.7.2`, tantivy `=0.26.1`, tokio `1.53.1`, rusqlite `0.40.1` (dev), rustc 1.97.1.
+2. ~~tantivy + turso exact version pins~~ → **Resolved at gate (v3 stack); superseded by v4.0 engine-independence (ADR-1/2).** Current pins: tokio `=1.53.1`, hyper `1.11.0`, askama `0.14`, chromiumoxide `0.9.1` + fetcher, zip `8.6`, rustc 1.85+ (`Cargo.toml` rust-version).
 3. ~~Thumbnail HTML→image method (SVG+resvg vs headless Chromium)~~ → **Resolved (Aug 4, 2026):** headless Chromium via **chromiumoxide 0.9.1** (CDP) + chromiumoxide_fetcher-pinned Chromium into `<data>/chromium` (rustls, no native-tls); Tailwind v4 compiled via standalone CLI (no Node); rationale — literal HTML+Tailwind v4, Blink determinism, pinned browser (no system Chrome dependency), permissive licensing.
-4. Embedding strategy post-v1 (lexical-only in v1, ADR-9).
+4. Embedding strategy post-v1 (lexical-only in v1, ADR-9). HNSW module ships (`src/tfdb/hnsw.rs`) but is unwired — no embedding pipeline; wire + generate embeddings post-release.
 5. ~~Windows CI target timing (post-macOS release)~~ → **Resolved (Aug 4, 2026):** Windows CI added to the Phase 4 workflow matrix (`windows-latest`); cross-platform test results will come from the first CI run once the repo is pushed.
 6. ~~Undocumented YouTube API limits (`search.list` ~750-result cap; `playlistItems.list` 20k-video cap)~~ → **Resolved (Aug 4, 2026):** documented from MW Metadata wiki research — see §5.3 API behavior notes; RSS `feeds/videos.xml` has no playlist cap.
