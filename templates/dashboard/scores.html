@@ -1,19 +1,21 @@
 <h1>Scores</h1>
 
 <div class="flex">
-  <form action="/scores" method="get">
+  <form action="/scores" method="get" hx-boost="true">
     <input type="search" name="q" value="{{ q }}" placeholder="Filter by title…" aria-label="Filter by title">
   </form>
   <span class="muted">{{ total }} matching · showing {{ rows.len() }} (top {{ limit }})</span>
 </div>
 
+<div style="overflow-x:auto">
 <table>
   <thead>
     <tr><th>Title</th><th>Channel</th><th>Category</th><th>SEO</th><th>GEO</th><th>Overall</th></tr>
   </thead>
   <tbody>
   {% for row in rows %}
-    <tr class="row" hx-get="/scores/{{ row.video_id }}" hx-trigger="click"
+    <tr class="row" tabindex="0" role="button" aria-expanded="false"
+        hx-get="/scores/{{ row.video_id }}" hx-trigger="click, keyup[key=='Enter']"
         hx-target="#detail-{{ row.video_id }}" hx-swap="innerHTML">
       <td>{{ row.title }}</td>
       <td class="muted">{{ row.channel }}</td>
@@ -21,6 +23,8 @@
       <td>{% if row.has_score %}{{ row.seo }}{% else %}—{% endif %}</td>
       <td>{% if row.has_score %}{{ row.geo }}{% else %}—{% endif %}</td>
       <td><strong>{% if row.has_score %}{{ row.total }}{% else %}—{% endif %}</strong></td>
+    </tr>
+    <tr>
       <td id="detail-{{ row.video_id }}" colspan="6" style="padding:0"></td>
     </tr>
   {% else %}
@@ -28,4 +32,5 @@
   {% endfor %}
   </tbody>
 </table>
-<p class="muted">Click a row to expand its 17 component values (10 SEO + 7 GEO).</p>
+</div>
+<p class="muted">Click a row (or focus it and press Enter) to expand its 17 component values (10 SEO + 7 GEO).</p>

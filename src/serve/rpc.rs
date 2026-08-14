@@ -1,7 +1,12 @@
-//! JSON-RPC 2.0 over WebSocket — streaming runtime analysis protocol.
+//! JSON-RPC 2.0 — the shared streaming analysis protocol.
 //!
-//! Every frontend tab connects to `/ws` and sends requests. The server
-//! computes results at runtime and streams back progress + final data.
+//! A single method surface is served over **two transports**:
+//!   - WebSocket at `/ws` (dashboard/frontend, see `serve/web/ws.rs`)
+//!   - **stdio** via `tubeforge rpc` (agent harnesses, see `serve/stdio.rs`)
+//!
+//! `dispatch()` is transport-agnostic: handlers push `RpcResponse`s into an
+//! `UnboundedSender<String>` channel, and the transport task forwards each
+//! serialized response to the client/agent.
 //!
 //! Message flow:
 //!   Client → Server: {"id":"req-1","method":"ideas.analyze","params":{}}
@@ -14,11 +19,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use futures::stream::{SplitSink, StreamExt};
+use futures::stream::StreamExt;
 use futures::SinkExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio::sync::Mutex;
 
 use crate::error::TubeforgeError;
 use crate::serve::web::{self, Response, ServeState};
@@ -56,8 +60,10 @@ const GEO_COMPONENT_KEYS: [&str; 7] = [
     "topic_relevance",
 ];
 
-/// Type alias for the WebSocket write half (sink side of `split()`).
-type WsSender = Arc<Mutex<SplitSink<web::ws::WebSocket, web::ws::Message>>>;
+/// Transport-agnostic RPC output channel. The WebSocket loop and the stdio
+/// JSON-RPC bridge (`serve::stdio`) both feed this channel; the transport
+/// task forwards each serialized `RpcResponse` to the client/agent.
+pub(crate) type RpcSender = tokio::sync::mpsc::UnboundedSender<String>;
 
 /// Client → Server request.
 #[derive(Debug, Deserialize)]
@@ -110,8 +116,19 @@ pub fn ws_handler(
 }
 
 async fn handle_socket(state: AppState, socket: web::ws::WebSocket) {
-    let (sender, mut receiver) = web::ws::split(socket);
-    let sender = Arc::new(Mutex::new(sender));
+    let (mut sink, mut receiver) = web::ws::split(socket);
+
+    // RPC output is pushed into a channel; one forwarder task drains it into
+    // the WebSocket sink. Keeps the handler dispatch transport-agnostic so the
+    // same method surface also runs over stdio (`serve::stdio`).
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let forwarder = tokio::spawn(async move {
+        while let Some(text) = rx.recv().await {
+            if sink.send(web::ws::Message::Text(text.into())).await.is_err() {
+                break; // client disconnected
+            }
+        }
+    });
 
     // Process messages sequentially per connection (preserves ordering).
     while let Some(Ok(msg)) = receiver.next().await {
@@ -129,7 +146,7 @@ async fn handle_socket(state: AppState, socket: web::ws::WebSocket) {
                         message: format!("parse error: {e}"),
                     },
                 };
-                let _ = send(&sender, &err).await;
+                let _ = send(&tx, &err).await;
                 continue;
             }
         };
@@ -140,31 +157,26 @@ async fn handle_socket(state: AppState, socket: web::ws::WebSocket) {
         // Clone into named owned locals so no borrow of the loop-local `state`
         // is held across the dispatch await (which must be Send).
         let owned_state = state.clone();
-        let owned_sender = sender.clone();
+        let owned_sender = tx.clone();
         dispatch(owned_state, owned_sender, req).await;
     }
+
+    drop(tx); // end the forwarder once the client closes
+    let _ = forwarder.await;
 }
 
-async fn send(sender: &WsSender, res: &RpcResponse) -> Result<(), TubeforgeError> {
+/// Serialize a response and push it into the transport channel. A closed
+/// channel means the client/agent has disconnected — treated as non-fatal.
+pub(crate) async fn send(sender: &RpcSender, res: &RpcResponse) -> Result<(), TubeforgeError> {
     let json = serde_json::to_string(res).map_err(|e| TubeforgeError::Storage {
-        code: "WS_SEND".into(),
+        code: "RPC_SERIALIZE".into(),
         message: e.to_string(),
     })?;
-    sender
-        .lock()
-        .await
-        .send(web::ws::Message::Text(json.into()))
-        .await
-        .map_err(|e| {
-            tracing::warn!("ws send failed (client likely disconnected): {e}");
-            TubeforgeError::Storage {
-                code: "WS_SEND".into(),
-                message: e.to_string(),
-            }
-        })
+    let _ = sender.send(json);
+    Ok(())
 }
 
-async fn progress(sender: &WsSender, id: &Value, pct: f32, msg: &str) {
+async fn progress(sender: &RpcSender, id: &Value, pct: f32, msg: &str) {
     let res = RpcResponse::Progress {
         id: id.clone(),
         progress: pct,
@@ -176,7 +188,8 @@ async fn progress(sender: &WsSender, id: &Value, pct: f32, msg: &str) {
 /// Route a request to the correct handler based on method name. Takes OWNED
 /// state/sender (clones) so the returned future is 'static + Send for axum's
 /// on_upgrade — handlers that await long operations (yt-dlp refresh) need this.
-async fn dispatch(state: AppState, sender: WsSender, req: RpcRequest) {
+/// Shared by the WebSocket loop and the stdio JSON-RPC bridge.
+pub(crate) async fn dispatch(state: AppState, sender: RpcSender, req: RpcRequest) {
     // Move the params out into a local owned by `dispatch`'s own future scope.
     // Passing `&req.params` (a borrow of the caller's loop-local `req`) across
     // the awaits makes the future non-Send for axum's `on_upgrade` — owning
@@ -374,7 +387,7 @@ async fn performance_for(db: &Db, video_id: &str) -> Value {
 
 async fn handle_dashboard(
     state: &AppState,
-    sender: &WsSender,
+    sender: &RpcSender,
     _params: &HashMap<String, Value>,
 ) -> Result<Value, TubeforgeError> {
     progress(sender, &Value::Null, 0.2, "Reading health report...").await;
@@ -412,7 +425,7 @@ async fn handle_dashboard(
 
 async fn handle_ideas(
     state: &AppState,
-    sender: &WsSender,
+    sender: &RpcSender,
     params: &HashMap<String, Value>,
 ) -> Result<Value, TubeforgeError> {
     progress(sender, &Value::Null, 0.1, "Loading videos from corpus...").await;
@@ -507,7 +520,7 @@ async fn compute_graph_ideas(state: &AppState) -> Value {
 
 async fn handle_keywords_list(
     state: &AppState,
-    sender: &WsSender,
+    sender: &RpcSender,
     _params: &HashMap<String, Value>,
 ) -> Result<Value, TubeforgeError> {
     progress(sender, &Value::Null, 0.4, "Loading keyword rankings...").await;
@@ -550,7 +563,7 @@ async fn handle_keywords_list(
 
 async fn handle_keywords_trending(
     state: &AppState,
-    sender: &WsSender,
+    sender: &RpcSender,
     _params: &HashMap<String, Value>,
 ) -> Result<Value, TubeforgeError> {
     progress(sender, &Value::Null, 0.5, "Loading trending keywords...").await;
@@ -574,7 +587,7 @@ async fn handle_keywords_trending(
 
 async fn handle_scores_list(
     state: &AppState,
-    sender: &WsSender,
+    sender: &RpcSender,
     params: &HashMap<String, Value>,
 ) -> Result<Value, TubeforgeError> {
     progress(sender, &Value::Null, 0.2, "Loading videos...").await;
@@ -638,7 +651,7 @@ async fn handle_scores_list(
 
 async fn handle_scores_detail(
     state: &AppState,
-    sender: &WsSender,
+    sender: &RpcSender,
     params: &HashMap<String, Value>,
 ) -> Result<Value, TubeforgeError> {
     let id = params
@@ -763,7 +776,7 @@ async fn compute_graph_scores_for_video(
 /// scores for all videos (not just the ones collected via search).
 async fn handle_scores_backfill(
     state: &AppState,
-    sender: &WsSender,
+    sender: &RpcSender,
     _params: &HashMap<String, Value>,
 ) -> Result<Value, TubeforgeError> {
     progress(sender, &Value::Null, 0.05, "Loading videos...").await;
@@ -829,7 +842,7 @@ async fn handle_scores_backfill(
 
 async fn handle_videos_list(
     state: &AppState,
-    sender: &WsSender,
+    sender: &RpcSender,
     params: &HashMap<String, Value>,
 ) -> Result<Value, TubeforgeError> {
     progress(sender, &Value::Null, 0.4, "Loading videos...").await;
@@ -890,7 +903,7 @@ async fn handle_videos_list(
 
 async fn handle_videos_detail(
     state: &AppState,
-    sender: &WsSender,
+    sender: &RpcSender,
     params: &HashMap<String, Value>,
 ) -> Result<Value, TubeforgeError> {
     let id = params
@@ -923,7 +936,7 @@ async fn handle_videos_detail(
 
 async fn handle_scorecard(
     state: &AppState,
-    sender: &WsSender,
+    sender: &RpcSender,
     _params: &HashMap<String, Value>,
 ) -> Result<Value, TubeforgeError> {
     progress(
@@ -974,7 +987,7 @@ async fn handle_scorecard(
 
 async fn handle_channels_snapshots(
     state: &AppState,
-    sender: &WsSender,
+    sender: &RpcSender,
     params: &HashMap<String, Value>,
 ) -> Result<Value, TubeforgeError> {
     let id = params
@@ -1010,7 +1023,7 @@ async fn handle_channels_snapshots(
 
 async fn handle_health(
     state: &AppState,
-    sender: &WsSender,
+    sender: &RpcSender,
     _params: &HashMap<String, Value>,
 ) -> Result<Value, TubeforgeError> {
     progress(sender, &Value::Null, 0.5, "Running health checks...").await;
@@ -1020,7 +1033,7 @@ async fn handle_health(
 
 async fn handle_gaps(
     state: &AppState,
-    sender: &WsSender,
+    sender: &RpcSender,
     _params: &HashMap<String, Value>,
 ) -> Result<Value, TubeforgeError> {
     progress(sender, &Value::Null, 0.2, "Loading videos...").await;
@@ -1087,7 +1100,7 @@ async fn compute_graph_gaps(state: &AppState) -> Value {
 
 async fn handle_tags_cloud(
     state: &AppState,
-    sender: &WsSender,
+    sender: &RpcSender,
     _params: &HashMap<String, Value>,
 ) -> Result<Value, TubeforgeError> {
     progress(sender, &Value::Null, 0.5, "Building tag cloud...").await;
@@ -1097,7 +1110,7 @@ async fn handle_tags_cloud(
 
 async fn handle_tags_gaps(
     state: &AppState,
-    sender: &WsSender,
+    sender: &RpcSender,
     _params: &HashMap<String, Value>,
 ) -> Result<Value, TubeforgeError> {
     let own = state.own_channel.as_deref().unwrap_or("");
@@ -1130,7 +1143,7 @@ async fn handle_tags_gaps(
 
 async fn handle_analysis_overview(
     state: &AppState,
-    sender: &WsSender,
+    sender: &RpcSender,
     _params: &HashMap<String, Value>,
 ) -> Result<Value, TubeforgeError> {
     progress(sender, &Value::Null, 0.2, "Loading videos...").await;
@@ -1165,7 +1178,7 @@ async fn handle_analysis_overview(
 
 async fn handle_analysis_next_video(
     state: &AppState,
-    sender: &WsSender,
+    sender: &RpcSender,
     _params: &HashMap<String, Value>,
 ) -> Result<Value, TubeforgeError> {
     let limit: usize = _params
@@ -1204,7 +1217,7 @@ async fn handle_analysis_next_video(
 
 async fn handle_analysis_keywords(
     state: &AppState,
-    sender: &WsSender,
+    sender: &RpcSender,
     params: &HashMap<String, Value>,
 ) -> Result<Value, TubeforgeError> {
     let horizon: f64 = params
@@ -1241,7 +1254,7 @@ async fn handle_analysis_keywords(
 /// results are written back so ALL tabs share the fresh data.
 async fn handle_analysis_refresh(
     state: &AppState,
-    sender: &WsSender,
+    sender: &RpcSender,
     params: &HashMap<String, Value>,
 ) -> Result<Value, TubeforgeError> {
     let ytdlp = state.ytdlp.clone().ok_or_else(|| {
@@ -1406,7 +1419,7 @@ async fn handle_analysis_refresh(
 
 async fn handle_alerts_list(
     state: &AppState,
-    sender: &WsSender,
+    sender: &RpcSender,
     _params: &HashMap<String, Value>,
 ) -> Result<Value, TubeforgeError> {
     progress(sender, &Value::Null, 0.5, "Loading alerts...").await;
@@ -1430,7 +1443,7 @@ async fn handle_alerts_list(
 
 async fn handle_audit(
     state: &AppState,
-    sender: &WsSender,
+    sender: &RpcSender,
     _params: &HashMap<String, Value>,
 ) -> Result<Value, TubeforgeError> {
     let own = state

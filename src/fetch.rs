@@ -8,12 +8,61 @@ pub mod api;
 pub mod oembed;
 pub mod quota;
 pub mod rss;
+pub mod ytdlp;
 
 use std::future::Future;
 use std::time::Duration;
 
-use crate::error::{storage_err, TubeforgeError};
 use crate::error::Source;
+use crate::error::{storage_err, TubeforgeError};
+
+/// YouTube autocomplete suggestions for a query, from Google's public
+/// suggestqueries endpoint (`client=youtube` returns real YouTube search
+/// suggestions — the same source VidIQ's "Related Keywords" uses).
+/// Keyless: no API key, no quota. Returns the suggested query strings.
+pub async fn youtube_suggestions(clients: &FetchClients, q: &str) -> Vec<String> {
+    let url = format!(
+        "https://suggestqueries.google.com/complete/search?client=youtube&gs_ri=youtube&ds=yt&hl=en&q={}",
+        urlencoding(q)
+    );
+    let Ok(resp) = clients.http.get(&url).send().await else {
+        return Vec::new();
+    };
+    let Ok(body) = resp.text().await else {
+        return Vec::new();
+    };
+    // Shape: `window.google.ac.h(["q",[["sug",0,[512]],...],...])`.
+    let Some(start) = body.find("[[") else {
+        return Vec::new();
+    };
+    let Some(end) = body[start..].find("]]") else {
+        return Vec::new();
+    };
+    let chunk = &body[start + 2..start + end];
+    let mut out = Vec::new();
+    for part in chunk.split("],") {
+        let trimmed = part.trim_start_matches('[').trim_start_matches('"');
+        let sug = trimmed.split('"').next().unwrap_or("");
+        if !sug.is_empty() {
+            out.push(sug.to_string());
+        }
+    }
+    out
+}
+
+/// Percent-encode a query string for the suggest endpoint.
+fn urlencoding(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
 
 pub const DEFAULT_RSS_BASE: &str = "https://www.youtube.com";
 pub const DEFAULT_OEMBED_BASE: &str = "https://www.youtube.com";

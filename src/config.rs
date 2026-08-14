@@ -19,6 +19,25 @@ pub struct Config {
     pub quota_warn_at: u64,
     /// Pinned Chromium install dir for the thumbnail renderer (Phase 3).
     pub chromium_dir: PathBuf,
+    /// yt-dlp binary path (Phase 6/6.5 transcript extraction). Default
+    /// `yt-dlp` (on PATH); `TUBEFORGE_YTDLP_PATH` overrides.
+    pub ytdlp_path: PathBuf,
+    /// Master switch for yt-dlp features (`TUBEFORGE_YTDLP_ENABLED`).
+    pub ytdlp_enabled: bool,
+    /// YouTube player-client preference for yt-dlp. Empty = let yt-dlp use
+    /// its native multi-client chain (visionos/android_vr/web + fallback).
+    /// `TUBEFORGE_YTDLP_CLIENT` overrides with e.g. `web`, `android`,
+    /// `all`, `-web` (exclusion).
+    pub ytdlp_client: Option<String>,
+    /// JS runtimes for PO-token generation (`--js-runtimes`), e.g. `bun`,
+    /// `node`, `deno`. Empty = yt-dlp default. `TUBEFORGE_YTDLP_JS_RUNTIME`
+    /// overrides.
+    pub ytdlp_js_runtime: Option<String>,
+    /// The channel we are GROWING (our own channel). `UC...` channel id from
+    /// `TUBEFORGE_OWN_CHANNEL`. Used to: mark our own videos vs competitors,
+    /// exclude our channel from the competitor set, and target growth analysis
+    /// (own channel vs the competitors it must beat).
+    pub own_channel: Option<String>,
 }
 
 impl Config {
@@ -35,12 +54,20 @@ impl Config {
             youtube_api_key: None,
             quota_warn_at: 90,
             chromium_dir: data_dir.join("chromium"),
+            ytdlp_path: PathBuf::from("yt-dlp"),
+            ytdlp_enabled: false,
+            ytdlp_client: None,
+            ytdlp_js_runtime: None,
+            own_channel: None,
         }
     }
 }
 
 /// Load `.env` per precedence rules, then resolve config.
-pub fn load(cli_config: Option<&Path>, cli_db_path: Option<&Path>) -> Result<Config, TubeforgeError> {
+pub fn load(
+    cli_config: Option<&Path>,
+    cli_db_path: Option<&Path>,
+) -> Result<Config, TubeforgeError> {
     load_env(cli_config)?;
 
     let mut cfg = Config::defaults();
@@ -75,9 +102,9 @@ pub fn load(cli_config: Option<&Path>, cli_db_path: Option<&Path>) -> Result<Con
     }
 
     if let Ok(v) = std::env::var("TUBEFORGE_BACKUP_KEEP") {
-        cfg.backup_keep = v
-            .parse()
-            .map_err(|_| TubeforgeError::Config(format!("TUBEFORGE_BACKUP_KEEP not a number: {v}")))?;
+        cfg.backup_keep = v.parse().map_err(|_| {
+            TubeforgeError::Config(format!("TUBEFORGE_BACKUP_KEEP not a number: {v}"))
+        })?;
     }
 
     if let Ok(v) = std::env::var("LOG_LEVEL") {
@@ -90,9 +117,37 @@ pub fn load(cli_config: Option<&Path>, cli_db_path: Option<&Path>) -> Result<Con
     };
 
     if let Ok(v) = std::env::var("TUBEFORGE_QUOTA_WARN_AT") {
-        cfg.quota_warn_at = v
-            .parse()
-            .map_err(|_| TubeforgeError::Config(format!("TUBEFORGE_QUOTA_WARN_AT not a number: {v}")))?;
+        cfg.quota_warn_at = v.parse().map_err(|_| {
+            TubeforgeError::Config(format!("TUBEFORGE_QUOTA_WARN_AT not a number: {v}"))
+        })?;
+    }
+
+    if let Ok(v) = std::env::var("TUBEFORGE_YTDLP_PATH") {
+        if !v.trim().is_empty() {
+            cfg.ytdlp_path = expand_tilde(&v);
+        }
+    }
+
+    if let Ok(v) = std::env::var("TUBEFORGE_YTDLP_ENABLED") {
+        cfg.ytdlp_enabled = matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes");
+    }
+
+    if let Ok(v) = std::env::var("TUBEFORGE_YTDLP_CLIENT") {
+        if !v.trim().is_empty() {
+            cfg.ytdlp_client = Some(v.trim().to_string());
+        }
+    }
+
+    if let Ok(v) = std::env::var("TUBEFORGE_YTDLP_JS_RUNTIME") {
+        if !v.trim().is_empty() {
+            cfg.ytdlp_js_runtime = Some(v.trim().to_string());
+        }
+    }
+
+    if let Ok(v) = std::env::var("TUBEFORGE_OWN_CHANNEL") {
+        if !v.trim().is_empty() {
+            cfg.own_channel = Some(v.trim().to_string());
+        }
     }
 
     Ok(cfg)
@@ -108,8 +163,9 @@ impl Config {
 
 fn load_env(cli_config: Option<&Path>) -> Result<(), TubeforgeError> {
     if let Some(path) = cli_config {
-        dotenvy::from_path(path)
-            .map_err(|e| TubeforgeError::Config(format!("cannot load env file {}: {e}", path.display())))?;
+        dotenvy::from_path(path).map_err(|e| {
+            TubeforgeError::Config(format!("cannot load env file {}: {e}", path.display()))
+        })?;
         return Ok(());
     }
     // CWD `.env` first, then the data-root `.env`.
@@ -121,8 +177,9 @@ fn load_env(cli_config: Option<&Path>) -> Result<(), TubeforgeError> {
     let home = home_dir().unwrap_or_default();
     let data_env = home.join(".tubeforge").join(".env");
     if data_env.exists() {
-        dotenvy::from_path(&data_env)
-            .map_err(|e| TubeforgeError::Config(format!("cannot load {}: {e}", data_env.display())))?;
+        dotenvy::from_path(&data_env).map_err(|e| {
+            TubeforgeError::Config(format!("cannot load {}: {e}", data_env.display()))
+        })?;
     }
     Ok(())
 }

@@ -1,0 +1,33 @@
+<div id="alerts-panel">
+  <div class="flex">
+    <button hx-post="/alerts/read" hx-target="#alerts-panel" hx-swap="outerHTML"
+            {% if unread == 0 %}disabled{% endif %}>Mark all read</button>
+    <button hx-post="/alerts/clear" hx-target="#alerts-panel" hx-swap="outerHTML"
+            {% if count == 0 %}disabled{% endif %}>Clear all</button>
+    <span class="muted">{{ unread }} unread</span>
+  </div>
+  <div id="alerts-list">
+    <div style="overflow-x:auto">
+      <table>
+        <thead>
+          <tr><th>Kind</th><th>Severity</th><th>Channel</th><th>Message</th><th>Created</th><th>State</th></tr>
+        </thead>
+        <tbody>
+        {% for alert in alerts %}
+          <tr>
+            <td><span class="badge {{ alert.kind }}">{{ alert.kind }}</span></td>
+            <td class="{{ alert.severity }}">{{ alert.severity }}</td>
+            <td class="muted">{{ alert.channel_id }}</td>
+            <td>{{ alert.message }}</td>
+            <td class="muted">{{ alert.created_at }}</td>
+            <td>{% if alert.read %}<span class="badge draft">read</span>{% else %}<span class="badge unread">unread</span>{% endif %}</td>
+          </tr>
+        {% else %}
+          <tr><td colspan="6" class="muted">No alerts.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="muted">Evaluated by <code>tubeforge alerts</code> — this dashboard only lists and clears.</p>
+  </div>
+</div>

@@ -24,10 +24,10 @@ pub const THUMB_WIDTH: u32 = 1280;
 pub const THUMB_HEIGHT: u32 = 720;
 
 /// The built-in template (authored at `templates/default.html`).
-pub const DEFAULT_TEMPLATE: &str = include_str!("../../templates/default.html");
+pub const DEFAULT_TEMPLATE: &str = include_str!("../templates/default.html");
 /// Compiled Tailwind CSS for the templates (authored at `templates/input.css`,
 /// built with the standalone Tailwind CLI; committed for offline builds).
-const DEFAULT_CSS: &str = include_str!("../../templates/tailwind.css");
+const DEFAULT_CSS: &str = include_str!("../templates/tailwind.css");
 
 /// Values substituted into a template. All optional; `None` renders an empty
 /// string and the `empty:` utilities hide the element.
@@ -63,10 +63,7 @@ pub fn load_template(name: &str) -> Result<&'static str, TubeforgeError> {
 /// Errors if any `{{...}}` placeholder is left unfilled afterwards, so a
 /// half-filled thumbnail can never be rendered silently. HTML comments (which
 /// document the placeholder convention) are stripped first.
-pub fn fill_template(
-    template: &str,
-    values: &TemplateValues,
-) -> Result<String, TubeforgeError> {
+pub fn fill_template(template: &str, values: &TemplateValues) -> Result<String, TubeforgeError> {
     let mut out = strip_html_comments(template);
     for (key, value) in [
         ("{{TITLE}}", values.title.as_deref()),
@@ -196,7 +193,10 @@ mod tests {
     #[test]
     fn fill_substitutes_all_placeholders() {
         let out = fill_template(TPL, &values()).expect("fill");
-        assert_eq!(out, "<h1>Rust in 60 seconds</h1><b>TubeForge</b><i>4:20</i>");
+        assert_eq!(
+            out,
+            "<h1>Rust in 60 seconds</h1><b>TubeForge</b><i>4:20</i>"
+        );
         assert!(!out.contains("{{"));
     }
 
@@ -227,7 +227,10 @@ mod tests {
 
     #[test]
     fn inline_css_replaces_link_with_style() {
-        let out = inline_css(&format!("<head>{LINK}</head>", LINK = r#"<link rel="stylesheet" href="tailwind.css">"#));
+        let out = inline_css(&format!(
+            "<head>{LINK}</head>",
+            LINK = r#"<link rel="stylesheet" href="tailwind.css">"#
+        ));
         assert!(out.contains("<style>"));
         assert!(!out.contains("rel=\"stylesheet\""));
         assert!(out.contains(".font-thumb"), "compiled css embedded");
@@ -266,9 +269,18 @@ mod tests {
 
     #[test]
     fn default_out_path_naming() {
-        assert_eq!(default_out_path(Some("abc123")), std::path::PathBuf::from("abc123.png"));
-        assert_eq!(default_out_path(Some("")), std::path::PathBuf::from("thumbnail.png"));
-        assert_eq!(default_out_path(None), std::path::PathBuf::from("thumbnail.png"));
+        assert_eq!(
+            default_out_path(Some("abc123")),
+            std::path::PathBuf::from("abc123.png")
+        );
+        assert_eq!(
+            default_out_path(Some("")),
+            std::path::PathBuf::from("thumbnail.png")
+        );
+        assert_eq!(
+            default_out_path(None),
+            std::path::PathBuf::from("thumbnail.png")
+        );
     }
 
     #[test]

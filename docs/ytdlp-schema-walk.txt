@@ -1,0 +1,1064 @@
+id: str
+title: str
+formats: array<object> (5 items)
+  format_id: str
+  format_note: str
+  ext: str
+  protocol: str
+  acodec: str
+  vcodec: str
+  url: str
+  width: int
+  height: int
+  fps: float
+  rows: int
+  columns: int
+  fragments: array<object> (1 items)
+    url: str
+    duration: float
+  audio_ext: str
+  video_ext: str
+  vbr: int
+  abr: int
+  tbr: null
+  resolution: str
+  aspect_ratio: float
+  filesize_approx: null
+  http_headers: object
+    User-Agent: str
+    Accept: str
+    Accept-Language: str
+    Sec-Fetch-Mode: str
+  format: str
+thumbnails: array<object> (42 items)
+  url: str
+  preference: int
+  id: str
+thumbnail: str
+description: str
+channel_id: str
+channel_url: str
+duration: int
+view_count: int
+average_rating: null
+age_limit: int
+webpage_url: str
+categories: array<str> (1)
+tags: array<empty> (0)
+playable_in_embed: bool
+live_status: str
+media_type: str
+release_timestamp: null
+_format_sort_fields: array<str> (10)
+automatic_captions: object
+  ab: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  aa: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  af: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  ak: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  sq: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  am: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  ar: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  hy: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  as: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  ay: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  az: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  bn: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  ba: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  eu: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  be: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  bho: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  bs: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  br: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  bg: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  my: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  ca: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  ceb: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  zh-Hans: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  zh-Hant: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  co: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  hr: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  cs: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  da: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  dv: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  nl: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  dz: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  en-orig: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  en: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  eo: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  et: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  ee: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  fo: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  fj: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  fil: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  fi: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  fr: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  gaa: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  gl: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  lg: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  ka: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  de: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  el: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  gn: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  gu: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  ht: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  ha: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  haw: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  iw: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  hi: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  hmn: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  hu: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  is: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  ig: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  id: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  iu: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  ga: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  it: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  ja: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  jv: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  kl: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  kn: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  kk: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  kha: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  km: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  rw: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  ko: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  kri: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  ku: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  ky: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  lo: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  la: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  lv: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  ln: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  lt: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  lua: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  luo: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  lb: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  mk: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  mg: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  ms: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  ml: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  mt: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  gv: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  mi: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  mr: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  mn: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  mfe: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  ne: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  new: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  nso: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  no: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  ny: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  oc: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  or: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  om: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  os: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  pam: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  ps: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  fa: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  pl: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  pt: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  pt-PT: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  pa: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  qu: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  ro: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  rn: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  ru: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  sm: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  sg: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  sa: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  gd: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  sr: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  crs: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  sn: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  sd: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  si: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  sk: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  sl: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  so: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  st: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  es: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  su: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  sw: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  ss: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  sv: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  tg: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  ta: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  tt: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  te: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  th: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  bo: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  ti: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  to: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  ts: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  tn: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  tum: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  tr: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  tk: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  uk: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  ur: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  ug: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  uz: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  ve: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  vi: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  war: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  cy: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  fy: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  wo: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  xh: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  yi: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  yo: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+  zu: array<object> (7 items)
+    ext: str
+    url: str
+    name: str
+    impersonate: bool
+    __yt_dlp_client: str
+subtitles: object
+comment_count: int
+chapters: null
+heatmap: array<object> (100 items)
+  start_time: float
+  end_time: float
+  value: float
+like_count: int
+channel: str
+channel_follower_count: int
+uploader: str
+uploader_id: str
+uploader_url: str
+upload_date: str
+timestamp: int
+availability: str
+original_url: str
+webpage_url_basename: str
+webpage_url_domain: str
+extractor: str
+extractor_key: str
+playlist: null
+playlist_index: null
+display_id: str
+fulltitle: str
+duration_string: str
+release_year: null
+is_live: bool
+was_live: bool
+requested_subtitles: null
+_has_drm: null
+epoch: int
+asr: int
+filesize: int
+format_id: str
+format_note: str
+source_preference: int
+fps: int
+audio_channels: int
+height: int
+quality: float
+has_drm: bool
+tbr: float
+filesize_approx: int
+url: str
+width: int
+language: str
+language_preference: int
+preference: null
+ext: str
+vcodec: str
+acodec: str
+dynamic_range: str
+available_at: int
+downloader_options: object
+  http_chunk_size: int
+protocol: str
+video_ext: str
+audio_ext: str
+vbr: null
+abr: null
+resolution: str
+aspect_ratio: float
+http_headers: object
+  User-Agent: str
+  Accept: str
+  Accept-Language: str
+  Sec-Fetch-Mode: str
+format: str

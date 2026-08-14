@@ -1,6 +1,10 @@
 <h1>Dashboard</h1>
 
-{{ counts_html|safe }}
+<div hx-ext="sse" sse-connect="/events">
+  <div id="counts" sse-swap="counts" hx-swap="innerHTML" aria-live="polite">
+    {{ counts_html|safe }}
+  </div>
+</div>
 
 <div class="cols2">
   <section>

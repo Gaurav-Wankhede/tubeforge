@@ -17,9 +17,7 @@ pub async fn run(cfg: &Config, to: Option<PathBuf>) -> Result<Value, TubeforgeEr
     db.integrity_check().await?;
 
     let snapshot = backup::backup(&db, &dir, cfg.backup_keep).await?;
-    let size = std::fs::metadata(&snapshot)
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let size = std::fs::metadata(&snapshot).map(|m| m.len()).unwrap_or(0);
 
     Ok(json!({
         "snapshot": snapshot.to_string_lossy(),

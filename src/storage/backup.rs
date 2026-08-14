@@ -18,11 +18,10 @@ pub const SNAPSHOT_PREFIX: &str = "tubeforge-";
 ///
 /// Returns the snapshot path.
 pub async fn backup(db: &Db, dir: &Path, keep: usize) -> Result<PathBuf, TubeforgeError> {
-    std::fs::create_dir_all(dir)
-        .map_err(|e| TubeforgeError::Storage {
-            code: "IO".to_string(),
-            message: format!("create backup dir {}: {e}", dir.display()),
-        })?;
+    std::fs::create_dir_all(dir).map_err(|e| TubeforgeError::Storage {
+        code: "IO".to_string(),
+        message: format!("create backup dir {}: {e}", dir.display()),
+    })?;
 
     let ts = iso_timestamp_utc();
     let snapshot = dir.join(format!("{SNAPSHOT_PREFIX}{ts}.db"));
@@ -92,6 +91,12 @@ fn remove_snapshot(snapshot: &Path) -> Result<(), TubeforgeError> {
         let companion = PathBuf::from(format!("{}{}", base.to_string_lossy(), suffix));
         let _ = std::fs::remove_file(companion);
     }
+    // tfdb snapshots mirror the checkpoint to `<snapshot>.dat` (so `Db::open`
+    // round-trips) plus its WAL companions; clean those up too.
+    for suffix in [".dat", ".dat-wal", ".dat-shm"] {
+        let companion = PathBuf::from(format!("{}{}", base.to_string_lossy(), suffix));
+        let _ = std::fs::remove_file(companion);
+    }
     Ok(())
 }
 
@@ -142,6 +147,9 @@ mod tests {
         let ts = iso_timestamp_utc();
         assert_eq!(ts.len(), 19); // YYYYMMDD-HHMMSS-mmm
         assert_eq!(&ts[8..9], "-");
-        assert!(ts.as_bytes().iter().all(|b| b.is_ascii_digit() || *b == b'-'));
+        assert!(ts
+            .as_bytes()
+            .iter()
+            .all(|b| b.is_ascii_digit() || *b == b'-'));
     }
 }

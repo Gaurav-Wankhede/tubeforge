@@ -33,10 +33,7 @@ const SETTLE: Duration = Duration::from_millis(150);
 
 /// Render `html` to a PNG at `out_path`, resolving the Chromium install dir
 /// from `TUBEFORGE_CHROMIUM_DIR` / `TUBEFORGE_DATA_DIR` / defaults.
-pub async fn render_html_to_png(
-    html: &str,
-    out_path: &Path,
-) -> Result<(), TubeforgeError> {
+pub async fn render_html_to_png(html: &str, out_path: &Path) -> Result<(), TubeforgeError> {
     let dir = chromium_dir();
     render_html_to_png_in(html, out_path, &dir).await
 }

@@ -6,7 +6,8 @@
 //!
 //! Representative set: init / health / score / ideas / keywords (add +
 //! report) / scorecard / alerts / export / check availability (no-key error
-//! path) / thumbnail list-templates / mcp.
+//! path) / thumbnail list-templates. Agent connection is via `--json` CLI
+//! and stdio JSON-RPC (tubeforge rpc) — there is no MCP server.
 
 use std::path::PathBuf;
 use std::process::{Command, Output};
@@ -19,7 +20,10 @@ fn run_ok(args: &[&str], envs: &[(&str, &str)]) -> Value {
     let out = run_cli(args, envs);
     assert_eq!(out.status.code(), Some(0), "exit 0 for {args:?}");
     let stdout = String::from_utf8(out.stdout).expect("utf8 stdout");
-    assert!(!stdout.contains('\u{1b}'), "no ANSI escapes in --json stdout");
+    assert!(
+        !stdout.contains('\u{1b}'),
+        "no ANSI escapes in --json stdout"
+    );
     let env: Value = serde_json::from_str(stdout.trim()).expect("stdout is one JSON envelope");
     assert_eq!(env["ok"], true, "ok==true for {args:?}");
     assert!(env.get("data").is_some(), "data present for {args:?}");
@@ -27,7 +31,10 @@ fn run_ok(args: &[&str], envs: &[(&str, &str)]) -> Value {
         env["meta"]["duration_ms"].is_u64(),
         "meta.duration_ms present for {args:?}"
     );
-    assert!(env.get("error").is_none(), "error absent on success for {args:?}");
+    assert!(
+        env.get("error").is_none(),
+        "error absent on success for {args:?}"
+    );
     env["data"].clone()
 }
 
@@ -63,8 +70,15 @@ impl Ctx {
     fn envs(&self) -> Vec<(&'static str, String)> {
         vec![
             ("TUBEFORGE_DB_PATH", self.db.to_string_lossy().to_string()),
-            ("TUBEFORGE_DATA_DIR", self.data.to_string_lossy().to_string()),
+            (
+                "TUBEFORGE_DATA_DIR",
+                self.data.to_string_lossy().to_string(),
+            ),
             ("YOUTUBE_API_KEY", String::new()),
+            // Hermetic: ignore any real `~/.tubeforge/.env` that enables
+            // yt-dlp. `discover` (and config-error paths) depend on this
+            // being off by default.
+            ("TUBEFORGE_YTDLP_ENABLED", "false".to_string()),
         ]
     }
 }
@@ -87,7 +101,10 @@ fn agent_contract_health() {
     run_ok(&["init"], &env_refs);
     let data = run_ok(&["health"], &env_refs);
     assert!(data["counts"]["videos"].is_u64());
-    assert!(data["privacy"]["unlisted"].is_u64(), "privacy census present");
+    assert!(
+        data["privacy"]["unlisted"].is_u64(),
+        "privacy census present"
+    );
     assert!(data["integrity"].is_string());
 }
 
@@ -113,7 +130,10 @@ fn agent_contract_ideas() {
     let env_refs: Vec<(&str, &str)> = envs.iter().map(|(k, v)| (*k, v.as_str())).collect();
     run_ok(&["init"], &env_refs);
     let data = run_ok(&["ideas", "--limit", "3"], &env_refs);
-    assert!(data["ideas"].is_array(), "empty corpus → empty pool, still ok");
+    assert!(
+        data["ideas"].is_array(),
+        "empty corpus → empty pool, still ok"
+    );
 }
 
 #[test]
@@ -126,6 +146,27 @@ fn agent_contract_keywords() {
     assert_eq!(data["added"], 2);
     let data = run_ok(&["keywords", "report"], &env_refs);
     assert!(data["keywords"].is_array());
+}
+
+/// `keywords discover` needs yt-dlp enabled. With it off (test default), it
+/// must fail with a clean CONFIG error envelope (LLD §4.2) — never a panic,
+/// never ANSI, never a partial success.
+#[test]
+fn agent_contract_keywords_discover_requires_ytdlp() {
+    let ctx = Ctx::new();
+    let envs = ctx.envs();
+    let env_refs: Vec<(&str, &str)> = envs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    run_ok(&["init"], &env_refs);
+
+    let out = run_cli(&["keywords", "discover", "rust best practices"], &env_refs);
+    assert_eq!(out.status.code(), Some(1), "config error exit code");
+    let stdout = String::from_utf8(out.stdout).expect("utf8 stdout");
+    assert!(!stdout.contains('\u{1b}'), "no ANSI in error envelope");
+    let env: Value = serde_json::from_str(stdout.trim()).expect("error envelope");
+    assert_eq!(env["ok"], false);
+    assert_eq!(env["error"]["code"], "CONFIG");
+    assert!(env["error"]["message"].is_string());
+    assert!(env.get("data").is_none());
 }
 
 #[test]
@@ -205,16 +246,70 @@ fn agent_contract_thumbnail_list_templates() {
     assert!(!templates.is_empty());
 }
 
-/// `mcp --json` must still yield a valid `.mcp.json` snippet under `data`
-/// (LLD §4.2 / ADR-8) — the machine path for agent MCP setup.
+/// Agent-harness bridge: spawn `tubeforge rpc`, speak line-delimited JSON-RPC
+/// on stdin, and assert the responses stream back on stdout. This is how
+/// harnesses (OpenCode, Claude Code, Codex, ...) connect for analysis — the
+/// tfdb database is the storage source.
 #[test]
-fn agent_contract_mcp_snippet() {
+fn agent_contract_stdio_rpc() {
+    use std::io::Write;
+    use std::process::Stdio;
+
     let ctx = Ctx::new();
     let envs = ctx.envs();
     let env_refs: Vec<(&str, &str)> = envs.iter().map(|(k, v)| (*k, v.as_str())).collect();
     run_ok(&["init"], &env_refs);
-    let data = run_ok(&["mcp"], &env_refs);
-    let server = &data["mcpServers"]["tubeforge"];
-    assert_eq!(server["command"], "tursodb");
-    assert_eq!(server["args"][1], "--mcp");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_tubeforge"))
+        .arg("rpc")
+        .arg("--db-path")
+        .arg(&ctx.db)
+        .envs(env_refs)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn tubeforge rpc");
+
+    let mut stdin = child.stdin.take().expect("stdin");
+    writeln!(stdin, r#"{{"id":"r1","method":"health.get","params":{{}}}}"#)
+        .expect("write request");
+    writeln!(
+        stdin,
+        r#"{{"id":"r2","method":"nonexistent.method","params":{{}}}}"#
+    )
+    .expect("write request");
+    drop(stdin); // EOF → process exits
+
+    let out = child.wait_with_output().expect("wait");
+    assert_eq!(out.status.code(), Some(0), "rpc exits 0 on stdin EOF");
+
+    // stdout must contain ONLY JSON-RPC response lines — no envelope, no logs.
+    let stdout = String::from_utf8(out.stdout).expect("utf8 stdout");
+    assert!(!stdout.contains('\u{1b}'), "no ANSI escapes on rpc stdout");
+    let lines: Vec<Value> = stdout
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).expect("each stdout line is one JSON-RPC response"))
+        .collect();
+    assert!(!lines.is_empty(), "expected at least one response");
+
+    // Find the result for r1 and the error for r2.
+    let r1: Vec<&Value> = lines.iter().filter(|v| v["id"] == "r1").collect();
+    assert!(
+        r1.iter().any(|v| v["type"] == "result" && v["data"].is_object()),
+        "health.get streams a result object for r1"
+    );
+    let r2: Vec<&Value> = lines.iter().filter(|v| v["id"] == "r2").collect();
+    assert!(
+        r2.iter().any(|v| v["type"] == "error" && v["error"]["code"] == -32603),
+        "unknown method returns -32603 for r2"
+    );
+    // No random output to stdout: every line must be an RPC envelope.
+    for v in &lines {
+        assert!(
+            v.get("type").is_some(),
+            "stdout is reserved for RPC responses; got {v}"
+        );
+    }
 }

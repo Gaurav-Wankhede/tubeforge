@@ -16,19 +16,27 @@ use std::collections::HashMap;
 
 use crate::error::TubeforgeError;
 
-/// SEO components in canonical order (LLD §7.2 table; `keyword_tags` is the
-/// Phase 1 basic-mode signal retained alongside the Phase 2 set).
-pub const SEO_COMPONENTS: [&str; 10] = [
+/// SEO components in canonical order (LLD §7.2 table + Phase 6.6 vidIQ
+/// benchmark additions + Phase 7 graph-based signals).
+pub const SEO_COMPONENTS: [&str; 18] = [
     "keyword_title",
     "title_front",
     "title_length",
     "title_hooks",
+    "title_40_chars",
     "keyword_desc",
     "desc_first150",
+    "desc_first2lines",
+    "desc_length",
     "desc_structure",
     "tags_relevance",
     "tags_quality",
     "keyword_tags",
+    "hashtag_count",
+    "keyword_triple",
+    "tag_authority",
+    "topic_dominance",
+    "keyword_competition",
 ];
 
 /// GEO components in canonical order (LLD §7.3 + C1/C2 free signals).
@@ -42,18 +50,30 @@ pub const GEO_COMPONENTS: [&str; 7] = [
     "topic_relevance",
 ];
 
-/// Documented baked SEO defaults (sum 1.00).
-const DEFAULT_SEO: [(&str, f64); 10] = [
-    ("keyword_title", 0.25),
-    ("title_front", 0.10),
-    ("title_length", 0.10),
-    ("title_hooks", 0.05),
-    ("keyword_desc", 0.15),
-    ("desc_first150", 0.10),
-    ("desc_structure", 0.05),
-    ("tags_relevance", 0.10),
-    ("tags_quality", 0.05),
-    ("keyword_tags", 0.05),
+/// Documented baked SEO defaults (sum 1.00). Phase 6.6 rebalance toward the
+/// vidIQ benchmark family: title+description ≈ 55%+ of the score (Alan
+/// Spicer: keyword-in-title 30% + description 25%), tags ≈ 23%, hashtags +
+/// cross-placement ≈ 10%. Phase 7 adds graph-based signals (≈12% combined):
+/// tag authority, topic dominance, keyword competition.
+const DEFAULT_SEO: [(&str, f64); 18] = [
+    ("keyword_title", 0.13),
+    ("title_front", 0.04),
+    ("title_length", 0.04),
+    ("title_hooks", 0.04),
+    ("title_40_chars", 0.09),
+    ("keyword_desc", 0.07),
+    ("desc_first150", 0.03),
+    ("desc_first2lines", 0.07),
+    ("desc_length", 0.05),
+    ("desc_structure", 0.03),
+    ("tags_relevance", 0.09),
+    ("tags_quality", 0.07),
+    ("keyword_tags", 0.04),
+    ("hashtag_count", 0.04),
+    ("keyword_triple", 0.04),
+    ("tag_authority", 0.05),
+    ("topic_dominance", 0.04),
+    ("keyword_competition", 0.04),
 ];
 
 /// Documented baked GEO defaults (sum 1.00). The C1/C2 free signals
@@ -84,8 +104,14 @@ impl Weights {
         Weights {
             seo_group: 1.0,
             geo_group: 1.0,
-            seo: DEFAULT_SEO.iter().map(|(k, v)| (k.to_string(), *v)).collect(),
-            geo: DEFAULT_GEO.iter().map(|(k, v)| (k.to_string(), *v)).collect(),
+            seo: DEFAULT_SEO
+                .iter()
+                .map(|(k, v)| (k.to_string(), *v))
+                .collect(),
+            geo: DEFAULT_GEO
+                .iter()
+                .map(|(k, v)| (k.to_string(), *v))
+                .collect(),
         }
     }
 
@@ -161,8 +187,16 @@ mod tests {
     #[test]
     fn defaults_sum_to_one_per_group() {
         let w = Weights::defaults();
-        assert!((w.seo_sum() - 1.0).abs() < 1e-9, "seo sum = {}", w.seo_sum());
-        assert!((w.geo_sum() - 1.0).abs() < 1e-9, "geo sum = {}", w.geo_sum());
+        assert!(
+            (w.seo_sum() - 1.0).abs() < 1e-9,
+            "seo sum = {}",
+            w.seo_sum()
+        );
+        assert!(
+            (w.geo_sum() - 1.0).abs() < 1e-9,
+            "geo sum = {}",
+            w.geo_sum()
+        );
         assert_eq!(w.seo_group, 1.0);
         assert_eq!(w.geo_group, 1.0);
         // Every component key resolves.
@@ -193,7 +227,12 @@ mod tests {
         assert_eq!(w.seo_weight("keyword_title"), 0.5);
         assert_eq!(w.geo_weight("entity_coverage"), 0.9);
         // Unset components keep their baked defaults.
-        assert_eq!(w.seo_weight("title_front"), 0.10);
+        assert_eq!(w.seo_weight("title_front"), 0.04);
+        assert_eq!(w.seo_weight("title_40_chars"), 0.09);
+        assert_eq!(w.seo_weight("keyword_triple"), 0.04);
+        assert_eq!(w.seo_weight("tag_authority"), 0.05);
+        assert_eq!(w.seo_weight("topic_dominance"), 0.04);
+        assert_eq!(w.seo_weight("keyword_competition"), 0.04);
         assert_eq!(w.geo_weight("qa_phrasing"), 0.12);
         assert_eq!(w.geo_weight("location_signal"), 0.10);
         assert_eq!(w.geo_weight("topic_relevance"), 0.10);

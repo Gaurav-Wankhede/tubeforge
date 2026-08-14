@@ -73,14 +73,11 @@ pub async fn run_get(video_id: &str) -> Result<Value, TubeforgeError> {
             inner: format!("HTTP {}", resp.status()),
         });
     }
-    let body = resp
-        .text()
-        .await
-        .map_err(|e| TubeforgeError::Fetch {
-            src: Source::Api,
-            url: url_s.clone(),
-            inner: format!("read body: {e}"),
-        })?;
+    let body = resp.text().await.map_err(|e| TubeforgeError::Fetch {
+        src: Source::Api,
+        url: url_s.clone(),
+        inner: format!("read body: {e}"),
+    })?;
     // Tolerant parse: the API shape has drifted before and will again. The
     // raw payload always goes through as-is; the summary degrades to null.
     let raw: Value = match serde_json::from_str(&body) {

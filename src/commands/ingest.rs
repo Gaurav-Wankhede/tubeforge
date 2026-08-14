@@ -29,6 +29,15 @@ pub async fn run_channels(
     let mut db = Db::open(&cfg.db_path).await?;
     let opts = IngestOptions { use_api, no_backup };
     let summary = ingest::ingest_channels(cfg, &clients, &mut db, refs, &opts).await?;
+    // Incremental KG update after ingest (non-fatal — logs warning on failure)
+    if let Err(e) = crate::analytics::kg_builder::build(
+        &db,
+        crate::analytics::kg_builder::BuildMode::Incremental,
+    )
+    .await
+    {
+        tracing::warn!(err = %e, "KG incremental update after channel ingest failed");
+    }
     Ok(summary_json(&summary))
 }
 
@@ -48,7 +57,8 @@ pub async fn run_links(
     let items = parse_input_items(&lines.join("\n"));
     if items.is_empty() {
         return Err(TubeforgeError::Usage(
-            "no video IDs found in input (expected watch?v=..., youtu.be/..., shorts/... links)".into(),
+            "no video IDs found in input (expected watch?v=..., youtu.be/..., shorts/... links)"
+                .into(),
         ));
     }
     let (ids, rejected) = partition_items(items);
@@ -68,10 +78,22 @@ pub async fn run_links(
     let mut db = Db::open(&cfg.db_path).await?;
     let opts = IngestOptions { use_api, no_backup };
     let mut summary = ingest::ingest_links(cfg, &clients, &mut db, &ids, &opts).await?;
-    let rejected_videos = rejected.iter().filter(|(item, _)| item.starts_with("video ")).count() as u64;
+    let rejected_videos = rejected
+        .iter()
+        .filter(|(item, _)| item.starts_with("video "))
+        .count() as u64;
     summary.rejected = rejected;
     summary.videos_failed += rejected_videos;
     ingest::record_invalid_items(&mut db, &summary.batch_id, &summary.rejected).await?;
+    // Incremental KG update after ingest (non-fatal — logs warning on failure)
+    if let Err(e) = crate::analytics::kg_builder::build(
+        &db,
+        crate::analytics::kg_builder::BuildMode::Incremental,
+    )
+    .await
+    {
+        tracing::warn!(err = %e, "KG incremental update after links ingest failed");
+    }
     Ok(summary_json(&summary))
 }
 
@@ -155,9 +177,8 @@ fn read_input(file: Option<&str>) -> Result<String, TubeforgeError> {
                 .map_err(|e| TubeforgeError::Config(format!("read stdin: {e}")))?;
             Ok(buf)
         }
-        Some(path) => std::fs::read_to_string(path).map_err(|e| TubeforgeError::Config(format!(
-            "read input file {path}: {e}"
-        ))),
+        Some(path) => std::fs::read_to_string(path)
+            .map_err(|e| TubeforgeError::Config(format!("read input file {path}: {e}"))),
     }
 }
 
@@ -178,26 +199,49 @@ mod tests {
     fn checksum_accepts_valid_last_chars() {
         // Real id: rickroll ends 'Q' (in [AEIMQUYcgkosw048]).
         assert!(valid_video_id_checksum("dQw4w9WgXcQ"));
-        for c in ['A', 'E', 'I', 'M', 'Q', 'U', 'Y', 'c', 'g', 'k', 'o', 's', 'w', '0', '4', '8'] {
-            assert!(valid_video_id_checksum(&format!("aaaaaaaaaa{c}")), "last char {c} valid");
+        for c in [
+            'A', 'E', 'I', 'M', 'Q', 'U', 'Y', 'c', 'g', 'k', 'o', 's', 'w', '0', '4', '8',
+        ] {
+            assert!(
+                valid_video_id_checksum(&format!("aaaaaaaaaa{c}")),
+                "last char {c} valid"
+            );
         }
-        assert!(valid_channel_id_checksum("UCa1b2c3d4e5f6g7h8i9j0kQ"), "canonical UC+22");
-        assert!(valid_channel_id_checksum("a1b2c3d4e5f6g7h8i9j0kQ"), "bare 22-char legacy");
+        assert!(
+            valid_channel_id_checksum("UCa1b2c3d4e5f6g7h8i9j0kQ"),
+            "canonical UC+22"
+        );
+        assert!(
+            valid_channel_id_checksum("a1b2c3d4e5f6g7h8i9j0kQ"),
+            "bare 22-char legacy"
+        );
     }
 
     #[test]
     fn checksum_rejects_bad_last_chars_and_lengths() {
         for c in ['B', 'D', 'b', '9', '1', 'X'] {
-            assert!(!valid_video_id_checksum(&format!("aaaaaaaaaa{c}")), "last char {c} invalid");
+            assert!(
+                !valid_video_id_checksum(&format!("aaaaaaaaaa{c}")),
+                "last char {c} invalid"
+            );
         }
         // Fixture-style synthetic ids (tests use them; not real) fail too.
         assert!(!valid_video_id_checksum("aaaaaaaaaaa"));
         assert!(!valid_video_id_checksum("aaaaaaaaaa")); // 10 chars
         assert!(!valid_video_id_checksum("aaaaaaaaaaaa")); // 12 chars
         assert!(!valid_video_id_checksum("aaaaaaaaaa!")); // non-id char
-        assert!(!valid_channel_id_checksum("UCa1b2c3d4e5f6g7h8i9j0kM"), "24-char id ending 'M'");
-        assert!(!valid_channel_id_checksum("UCa1b2c3d4e5f6g7h8i9j0kL"), "24-char id ending 'L'");
-        assert!(!valid_channel_id_checksum("a1b2c3d4e5f6g7h8i9j0kM"), "bare 22-char ending 'M'");
+        assert!(
+            !valid_channel_id_checksum("UCa1b2c3d4e5f6g7h8i9j0kM"),
+            "24-char id ending 'M'"
+        );
+        assert!(
+            !valid_channel_id_checksum("UCa1b2c3d4e5f6g7h8i9j0kL"),
+            "24-char id ending 'L'"
+        );
+        assert!(
+            !valid_channel_id_checksum("a1b2c3d4e5f6g7h8i9j0kM"),
+            "bare 22-char ending 'M'"
+        );
     }
 
     // -- A2 URL forms ---------------------------------------------------------
@@ -211,7 +255,10 @@ mod tests {
             ("https://www.youtube.com/watch/8Ab_2vG4TkM", "8Ab_2vG4TkM"),
             ("https://www.youtube.com/live/8Ab_2vG4TkM", "8Ab_2vG4TkM"),
             ("https://youtu.be/8Ab_2vG4TkM?t=30", "8Ab_2vG4TkM"),
-            ("https://www.youtube.com/watch?v=7lCDEYXw3mM&list=PLabc", "7lCDEYXw3mM"),
+            (
+                "https://www.youtube.com/watch?v=7lCDEYXw3mM&list=PLabc",
+                "7lCDEYXw3mM",
+            ),
         ] {
             assert_eq!(ids(url), vec![want.to_string()], "{url}");
         }
@@ -220,7 +267,10 @@ mod tests {
     #[test]
     fn bare_11_char_ids_are_checksum_filtered() {
         assert_eq!(ids("dQw4w9WgXcQ"), vec!["dQw4w9WgXcQ"]);
-        assert!(ids("dQw4w9WgXcB").is_empty(), "bad-checksum bare id rejected");
+        assert!(
+            ids("dQw4w9WgXcB").is_empty(),
+            "bad-checksum bare id rejected"
+        );
         // Bare + URL mixed in one input, deduped in order.
         assert_eq!(
             ids("dQw4w9WgXcQ\nyoutu.be/dQw4w9WgXcQ"),
@@ -251,7 +301,10 @@ mod tests {
             parse_input_items("https://youtube.com/@weird_name"),
             vec![I::Handle("@weird_name".into())]
         );
-        assert_eq!(parse_input_items("@handle"), vec![I::Handle("@handle".into())]);
+        assert_eq!(
+            parse_input_items("@handle"),
+            vec![I::Handle("@handle".into())]
+        );
         assert_eq!(
             parse_input_items("https://youtube.com/c/MyCustomName"),
             vec![I::Custom("MyCustomName".into())]

@@ -69,7 +69,10 @@ async fn render_headless_chromium_png() {
 
     let bytes = std::fs::read(&out).expect("read png");
     // PNG signature.
-    assert_eq!(&bytes[..8], &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]);
+    assert_eq!(
+        &bytes[..8],
+        &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]
+    );
     // IHDR: width/height at fixed offsets 16..24.
     let width = u32::from_be_bytes(bytes[16..20].try_into().expect("width"));
     let height = u32::from_be_bytes(bytes[20..24].try_into().expect("height"));

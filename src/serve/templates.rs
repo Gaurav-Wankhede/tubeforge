@@ -125,16 +125,25 @@ pub struct KeywordTrendView {
     pub spark: String,
 }
 
-/// Alerts page.
+/// Alerts page: full panel (action buttons + list) embedded.
 #[derive(Template)]
 #[template(path = "dashboard/alerts.html")]
 pub struct AlertsPageTemplate<'a> {
-    pub list_html: &'a str,
+    pub panel_html: &'a str,
+}
+
+/// Alerts panel fragment — action buttons AND list in one swap target, so
+/// the buttons' disabled state is refreshed by the same htmx swap that
+/// updates the list (mark-read / clear handlers return this).
+#[derive(Template)]
+#[template(path = "dashboard/alerts_panel.html")]
+pub struct AlertsPanelTemplate<'a> {
+    pub alerts: &'a [AlertRowView],
     pub unread: usize,
     pub count: usize,
 }
 
-/// Alerts list fragment — replaced by htmx after mark-read / clear.
+/// Alerts list fragment — home-page teaser only (no action buttons).
 #[derive(Template)]
 #[template(path = "dashboard/alerts_list.html")]
 pub struct AlertsListTemplate<'a> {

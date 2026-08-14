@@ -9,10 +9,10 @@ use serde_json::{json, Value};
 
 use crate::analytics::graph;
 use crate::error::TubeforgeError;
+use crate::scoring::weights::Weights;
 use crate::search::bm25::Bm25;
 use crate::search::FIELD_TITLE;
-use crate::scoring::weights::Weights;
-use crate::storage::db::{VideoRow, Db};
+use crate::storage::db::{Db, VideoRow};
 use crate::util;
 
 /// Candidate rank weights (LLD §8.2).
@@ -34,6 +34,15 @@ pub struct IdeaCandidate {
     pub rationale: Value,
 }
 
+/// A computed idea from runtime analysis — NOT persisted to DB.
+#[derive(Debug, Clone)]
+pub struct ComputedIdea {
+    pub title_suggestion: String,
+    pub source_video: Option<String>,
+    pub score: f64,
+    pub rationale: Value,
+}
+
 /// Generate + persist the idea pool (LLD §8.2). `top_n` bounds the output
 /// pool; `niche` feeds the idea-fit similarity. Returns the pool sorted by
 /// rank descending.
@@ -45,6 +54,41 @@ pub async fn generate(
     niche: Option<&str>,
     top_n: usize,
 ) -> Result<Vec<IdeaCandidate>, TubeforgeError> {
+    let computed = analyze(db, bm25, videos, weights, niche, top_n).await?;
+
+    let mut out: Vec<IdeaCandidate> = Vec::new();
+    for c in computed {
+        let id = db
+            .upsert_idea(
+                &c.title_suggestion,
+                &c.rationale.to_string(),
+                round2(c.score),
+                "draft",
+                c.source_video.as_deref(),
+            )
+            .await?;
+        out.push(IdeaCandidate {
+            idea_id: id,
+            title_suggestion: c.title_suggestion,
+            source_video: c.source_video,
+            score: c.score,
+            status: "draft".to_string(),
+            rationale: c.rationale,
+        });
+    }
+    Ok(out)
+}
+
+/// Compute idea candidates at runtime WITHOUT persisting to DB. Same scoring
+/// logic as `generate()` — returns fresh analysis from current corpus state.
+pub async fn analyze(
+    db: &Db,
+    bm25: &Bm25,
+    videos: &[VideoRow],
+    weights: &Weights,
+    niche: Option<&str>,
+    top_n: usize,
+) -> Result<Vec<ComputedIdea>, TubeforgeError> {
     let keywords: Vec<String> = db
         .list_keywords()
         .await?
@@ -89,7 +133,7 @@ pub async fn generate(
         .chain(niche.into_iter().flat_map(util::tokens))
         .collect();
 
-    let mut out: Vec<IdeaCandidate> = Vec::new();
+    let mut out: Vec<ComputedIdea> = Vec::new();
     for (video_id, kw) in candidates {
         let Some(video) = videos_by_id.get(video_id.as_str()) else {
             continue;
@@ -97,7 +141,6 @@ pub async fn generate(
         let tags: Vec<String> = serde_json::from_str(&video.tags).unwrap_or_default();
 
         let seo_total = scores.get(&video_id).copied().unwrap_or_else(|| {
-            // No stored score yet — compute on the fly, self-excluded.
             crate::scoring::compute(
                 &video.title,
                 &video.description,
@@ -126,8 +169,6 @@ pub async fn generate(
         };
 
         // competitor_gap: low-centrality channel x high-demand keyword.
-        // Demand proxy: how many competitor titles currently match the
-        // keyword (deterministic, free-signal).
         let demand_matches = bm25.matches(FIELD_TITLE, &kw).len();
         let demand = (demand_matches as f64 / 20.0).min(1.0);
         let centrality = video
@@ -138,27 +179,33 @@ pub async fn generate(
             .unwrap_or(0.0);
         let competitor_gap = (1.0 - centrality) * 100.0 * demand;
 
+        // Phase 6.6 comments-weight: engagement lift on the gap term (0-25% boost).
+        let engagement_boost = crate::analytics::performance::engagement_ratio(
+            video.view_count,
+            video.like_count,
+            video.comment_count,
+        )
+        .map(|r| ((r * 100.0) / 4.0).clamp(0.0, 1.0) * 0.25)
+        .unwrap_or(0.0);
+        let competitor_gap = competitor_gap * (1.0 + engagement_boost);
+
         let score = W_SEO * seo_total + W_FIT * idea_fit + W_GAP * competitor_gap;
 
         let rationale = json!({
             "seo_total": round2(seo_total),
             "idea_fit": round2(idea_fit),
             "competitor_gap": round2(competitor_gap),
+            "engagement_boost": round4(engagement_boost),
             "centrality": round4(centrality),
             "demand_matches": demand_matches,
             "keyword": kw,
             "source_channel": video.channel_id,
         });
 
-        let id = db
-            .upsert_idea(&video.title, &rationale.to_string(), round2(score), "draft", Some(&video_id))
-            .await?;
-        out.push(IdeaCandidate {
-            idea_id: id,
+        out.push(ComputedIdea {
             title_suggestion: video.title.clone(),
             source_video: Some(video_id),
             score: round2(score),
-            status: "draft".to_string(),
             rationale,
         });
     }

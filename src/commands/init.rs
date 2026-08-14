@@ -11,21 +11,24 @@ use crate::storage::Db;
 const ENV_EXAMPLE: &str = include_str!("../../.env.example");
 
 pub async fn run(cfg: &Config) -> Result<Value, TubeforgeError> {
-    std::fs::create_dir_all(&cfg.data_dir).map_err(|e| TubeforgeError::Config(format!(
-        "cannot create data dir {}: {e}",
-        cfg.data_dir.display()
-    )))?;
-    std::fs::create_dir_all(&cfg.backup_dir).map_err(|e| TubeforgeError::Config(format!(
-        "cannot create backup dir {}: {e}",
-        cfg.backup_dir.display()
-    )))?;
+    std::fs::create_dir_all(&cfg.data_dir).map_err(|e| {
+        TubeforgeError::Config(format!(
+            "cannot create data dir {}: {e}",
+            cfg.data_dir.display()
+        ))
+    })?;
+    std::fs::create_dir_all(&cfg.backup_dir).map_err(|e| {
+        TubeforgeError::Config(format!(
+            "cannot create backup dir {}: {e}",
+            cfg.backup_dir.display()
+        ))
+    })?;
 
     let env_path = cfg.data_dir.join(".env.example");
     if !env_path.exists() {
-        std::fs::write(&env_path, ENV_EXAMPLE).map_err(|e| TubeforgeError::Config(format!(
-            "cannot write {}: {e}",
-            env_path.display()
-        )))?;
+        std::fs::write(&env_path, ENV_EXAMPLE).map_err(|e| {
+            TubeforgeError::Config(format!("cannot write {}: {e}", env_path.display()))
+        })?;
         tracing::info!(path = %env_path.display(), "wrote .env.example");
     } else {
         tracing::info!(path = %env_path.display(), ".env.example exists, leaving unchanged");
@@ -37,10 +40,12 @@ pub async fn run(cfg: &Config) -> Result<Value, TubeforgeError> {
 
     // Index dir is created lazily by ingest/reindex, but init pre-creates it
     // so the data-root layout is complete (LLD §9 data root).
-    std::fs::create_dir_all(cfg.index_dir()).map_err(|e| TubeforgeError::Config(format!(
-        "cannot create index dir {}: {e}",
-        cfg.index_dir().display()
-    )))?;
+    std::fs::create_dir_all(cfg.index_dir()).map_err(|e| {
+        TubeforgeError::Config(format!(
+            "cannot create index dir {}: {e}",
+            cfg.index_dir().display()
+        ))
+    })?;
 
     tracing::info!(
         db = %cfg.db_path.display(),

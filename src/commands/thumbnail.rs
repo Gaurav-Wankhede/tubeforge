@@ -79,7 +79,10 @@ async fn resolve_values(
             Some(cid) => db.get_channel(cid).await?.map(|c| c.title),
             None => None,
         };
-        Ok((Some(vid.clone()), thumbnail::values_from_video(&row, channel.as_deref())))
+        Ok((
+            Some(vid.clone()),
+            thumbnail::values_from_video(&row, channel.as_deref()),
+        ))
     } else {
         let title = input.draft_title.clone().unwrap_or_default();
         if title.trim().is_empty() {

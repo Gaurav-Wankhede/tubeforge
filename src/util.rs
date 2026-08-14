@@ -21,28 +21,3 @@ pub fn now_rfc3339() -> String {
 pub fn batch_id() -> String {
     Utc::now().format("%Y%m%dT%H%M%SZ").to_string()
 }
-
-/// `true` when `prog` exists somewhere on `PATH` (used by `tubeforge mcp`).
-pub fn on_path(prog: &str) -> bool {
-    std::env::var_os("PATH")
-        .map(|paths| {
-            std::env::split_paths(&paths).any(|dir| {
-                let full = dir.join(prog);
-                full.is_file() && is_executable(&full)
-            })
-        })
-        .unwrap_or(false)
-}
-
-#[cfg(unix)]
-fn is_executable(p: &std::path::Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    p.metadata()
-        .map(|m| m.permissions().mode() & 0o111 != 0)
-        .unwrap_or(false)
-}
-
-#[cfg(not(unix))]
-fn is_executable(p: &std::path::Path) -> bool {
-    p.is_file()
-}

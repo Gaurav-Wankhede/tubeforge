@@ -1,5 +1,6 @@
 <div id="alerts-list">
-  <table>
+  <div style="overflow-x:auto">
+    <table>
     <thead>
       <tr><th>Kind</th><th>Severity</th><th>Channel</th><th>Message</th><th>Created</th><th>State</th></tr>
     </thead>
@@ -18,5 +19,6 @@
     {% endfor %}
     </tbody>
   </table>
+  </div>
   <p class="muted">Evaluated by <code>tubeforge alerts</code> — this dashboard only lists and clears.</p>
 </div>

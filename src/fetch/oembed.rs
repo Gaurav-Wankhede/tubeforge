@@ -69,14 +69,11 @@ pub async fn fetch(clients: &FetchClients, video_id: &str) -> Result<OEmbed, Tub
         });
     };
 
-    let body = resp
-        .text()
-        .await
-        .map_err(|e| TubeforgeError::Fetch {
-            src: Source::OEmbed,
-            url: url_s.clone(),
-            inner: format!("read body: {e}"),
-        })?;
+    let body = resp.text().await.map_err(|e| TubeforgeError::Fetch {
+        src: Source::OEmbed,
+        url: url_s.clone(),
+        inner: format!("read body: {e}"),
+    })?;
 
     serde_json::from_str(&body).map_err(|e| TubeforgeError::Parse {
         src: Source::OEmbed,

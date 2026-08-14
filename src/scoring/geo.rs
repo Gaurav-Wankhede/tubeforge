@@ -15,8 +15,15 @@ use crate::util;
 const ENTITIES: [&str; 5] = ["who", "what", "when", "where", "how"];
 
 /// Casual/conversational markers for the density-ceiling floor.
-const TONE_MARKERS: [&str; 7] =
-    ["you", "your", "we", "just", "really", "actually", "basically"];
+const TONE_MARKERS: [&str; 7] = [
+    "you",
+    "your",
+    "we",
+    "just",
+    "really",
+    "actually",
+    "basically",
+];
 
 /// The seven GEO components as computed by `compute`.
 #[derive(Debug, Clone)]
@@ -85,11 +92,7 @@ pub fn compute(desc: &str, tags: &[String], keywords: &[String], meta: &GeoMeta)
 /// §7.3 `entity_coverage`: +20 per W-entity token present in the description.
 pub fn entity_coverage_score(desc: &str) -> f64 {
     let words: HashSet<String> = util::tokens(desc).into_iter().collect();
-    ENTITIES
-        .iter()
-        .filter(|e| words.contains(**e))
-        .count() as f64
-        * 20.0
+    ENTITIES.iter().filter(|e| words.contains(**e)).count() as f64 * 20.0
 }
 
 /// §7.3 `qa_phrasing`: question-style lines — 0 → 0, 1 → 60, ≥2 → 100.
@@ -337,7 +340,10 @@ mod tests {
         assert_eq!(conversational_score("", &kw("database")), 20.0);
         // Sparse keyword use → no penalty.
         assert_eq!(
-            conversational_score("a plain natural sentence without keywords at all", &kw("database")),
+            conversational_score(
+                "a plain natural sentence without keywords at all",
+                &kw("database")
+            ),
             100.0
         );
         // Keyword stuffing → density ceiling penalty.
@@ -355,8 +361,14 @@ mod tests {
     fn metadata_complete_golden_vectors() {
         assert_eq!(metadata_complete_score("", &[]), 0.0);
         assert_eq!(metadata_complete_score("desc only", &[]), 35.0);
-        assert_eq!(metadata_complete_score("desc with 1:23 timestamps", &["t".to_string()]), 100.0);
-        assert_eq!(metadata_complete_score("desc https://example.com", &["t".to_string()]), 70.0);
+        assert_eq!(
+            metadata_complete_score("desc with 1:23 timestamps", &["t".to_string()]),
+            100.0
+        );
+        assert_eq!(
+            metadata_complete_score("desc https://example.com", &["t".to_string()]),
+            70.0
+        );
     }
 
     #[test]
@@ -364,15 +376,30 @@ mod tests {
         let approx = |got: f64, want: f64| (got - want).abs() < 1e-9;
         // API/oEmbed rows with a field absent = DISABLED → no penalty.
         assert_eq!(engagement_completeness("api", None, None, None), 100.0);
-        assert_eq!(engagement_completeness("oembed", Some(1), None, Some(2)), 100.0);
+        assert_eq!(
+            engagement_completeness("oembed", Some(1), None, Some(2)),
+            100.0
+        );
         // RSS rows with a field absent = genuinely unknown → penalized.
-        assert!(approx(engagement_completeness("rss", Some(1), None, Some(2)), 200.0 / 3.0));
+        assert!(approx(
+            engagement_completeness("rss", Some(1), None, Some(2)),
+            200.0 / 3.0
+        ));
         assert_eq!(engagement_completeness("rss", None, None, None), 0.0);
         // Present counts are complete regardless of source.
-        assert_eq!(engagement_completeness("rss", Some(1), Some(2), Some(3)), 100.0);
+        assert_eq!(
+            engagement_completeness("rss", Some(1), Some(2), Some(3)),
+            100.0
+        );
         // Same row shape: api (like disabled) = 100, rss (like unknown) = 2/3.
-        assert_eq!(engagement_completeness("api", Some(1), None, Some(3)), 100.0);
-        assert!(approx(engagement_completeness("rss", Some(1), None, Some(3)), 200.0 / 3.0));
+        assert_eq!(
+            engagement_completeness("api", Some(1), None, Some(3)),
+            100.0
+        );
+        assert!(approx(
+            engagement_completeness("rss", Some(1), None, Some(3)),
+            200.0 / 3.0
+        ));
     }
 
     fn meta(
@@ -404,17 +431,51 @@ mod tests {
             Some(37.422),
             Some(-122.084),
         );
-        assert_eq!(location_signal_score(&near), 100.0, "present + near publish");
-        let far = meta("2026-07-15T10:00:00Z", Some("2026-05-16T00:00:00Z"), None, Some(37.422), Some(-122.084));
+        assert_eq!(
+            location_signal_score(&near),
+            100.0,
+            "present + near publish"
+        );
+        let far = meta(
+            "2026-07-15T10:00:00Z",
+            Some("2026-05-16T00:00:00Z"),
+            None,
+            Some(37.422),
+            Some(-122.084),
+        );
         assert_eq!(location_signal_score(&far), 70.0, "present + far publish");
         let name_only = meta("2026-07-15T10:00:00Z", None, Some("Berlin"), None, None);
-        assert_eq!(location_signal_score(&name_only), 70.0, "location name alone");
-        let unparseable = meta("2026-07-15T10:00:00Z", Some("not-a-date"), Some("Berlin"), None, None);
-        assert_eq!(location_signal_score(&unparseable), 70.0, "unparseable date → no bonus");
+        assert_eq!(
+            location_signal_score(&name_only),
+            70.0,
+            "location name alone"
+        );
+        let unparseable = meta(
+            "2026-07-15T10:00:00Z",
+            Some("not-a-date"),
+            Some("Berlin"),
+            None,
+            None,
+        );
+        assert_eq!(
+            location_signal_score(&unparseable),
+            70.0,
+            "unparseable date → no bonus"
+        );
         let absent = meta("2026-07-15T10:00:00Z", None, None, None, None);
         assert_eq!(location_signal_score(&absent), 0.0, "absent");
-        let date_only = meta("2026-07-15T10:00:00Z", Some("2026-07-10T00:00:00Z"), None, None, None);
-        assert_eq!(location_signal_score(&date_only), 0.0, "date alone is not a location signal");
+        let date_only = meta(
+            "2026-07-15T10:00:00Z",
+            Some("2026-07-10T00:00:00Z"),
+            None,
+            None,
+            None,
+        );
+        assert_eq!(
+            location_signal_score(&date_only),
+            0.0,
+            "date alone is not a location signal"
+        );
     }
 
     /// C2 golden vector: full Jaccard overlap → 100, disjoint → 0, partial
@@ -424,13 +485,22 @@ mod tests {
         let urls = |s: &[&str]| s.iter().map(|u| u.to_string()).collect::<Vec<String>>();
         let kw = |s: &str| vec![s.to_string()];
         let ai = "https://en.wikipedia.org/wiki/Artificial_intelligence";
-        assert_eq!(topic_relevance_score(&urls(&[ai]), &kw("artificial intelligence")), 100.0);
-        assert_eq!(topic_relevance_score(&urls(&[ai]), &kw("rust database")), 0.0);
+        assert_eq!(
+            topic_relevance_score(&urls(&[ai]), &kw("artificial intelligence")),
+            100.0
+        );
+        assert_eq!(
+            topic_relevance_score(&urls(&[ai]), &kw("rust database")),
+            0.0
+        );
         assert_eq!(topic_relevance_score(&urls(&[ai]), &kw("artificial")), 50.0);
         assert_eq!(topic_relevance_score(&[], &kw("ai")), 0.0, "no topics");
         assert_eq!(topic_relevance_score(&urls(&[ai]), &[]), 0.0, "no keywords");
         let dl = "https://en.wikipedia.org/wiki/Deep_learning";
-        assert_eq!(topic_relevance_score(&urls(&[dl]), &kw("deep learning")), 100.0);
+        assert_eq!(
+            topic_relevance_score(&urls(&[dl]), &kw("deep learning")),
+            100.0
+        );
     }
 
     #[test]
@@ -439,7 +509,10 @@ mod tests {
             topic_labels(&["https://en.wikipedia.org/wiki/Artificial_intelligence".to_string()]),
             vec!["Artificial intelligence".to_string()]
         );
-        assert_eq!(topic_labels(&["https://en.wikipedia.org/wiki/Deep_learning".to_string()]), vec!["Deep learning".to_string()]);
+        assert_eq!(
+            topic_labels(&["https://en.wikipedia.org/wiki/Deep_learning".to_string()]),
+            vec!["Deep learning".to_string()]
+        );
         assert!(topic_labels(&[]).is_empty());
     }
 }

@@ -33,6 +33,12 @@ const FIELDS: &str = "items(id,snippet(title,description,tags,categoryId,publish
                       topicDetails(topicCategories))";
 const CHANNELS_FIELDS: &str = "items(id,snippet(title))";
 
+/// `commentThreads.list` projection: top-level comment snippet only (id,
+/// authorDisplayName, textDisplay, likeCount, publishedAt) + pageToken.
+const COMMENT_FIELDS: &str = "items(id,snippet(topLevelComment(id,snippet(\
+                              authorDisplayName,textDisplay,likeCount,publishedAt)))),\
+                              nextPageToken";
+
 /// `videos.list` parts/fields for `check availability`: `status` only is
 /// enough for privacyStatus, but the spec calls for `part=snippet,status`
 /// and the snippet carries the channel id used to attach the alert.
@@ -176,13 +182,17 @@ impl ApiClient {
         let mut attempts: u32 = 0;
         loop {
             attempts += 1;
-            let resp = self.clients.http.get(&url_s).send().await.map_err(|e| {
-                TubeforgeError::Fetch {
-                    src: Source::Api,
-                    url: url_s.clone(),
-                    inner: e.to_string(),
-                }
-            })?;
+            let resp =
+                self.clients
+                    .http
+                    .get(&url_s)
+                    .send()
+                    .await
+                    .map_err(|e| TubeforgeError::Fetch {
+                        src: Source::Api,
+                        url: url_s.clone(),
+                        inner: e.to_string(),
+                    })?;
             let status = resp.status();
             if status.is_success() {
                 return parse_availability_body(&url_s, resp.text().await).await;
@@ -249,21 +259,17 @@ impl ApiClient {
         let url_s = url.to_string();
 
         let resp = self.request(&url_s, Source::Api).await?;
-        let body = resp
-            .text()
-            .await
-            .map_err(|e| TubeforgeError::Fetch {
-                src: Source::Api,
-                url: url_s.clone(),
-                inner: format!("read body: {e}"),
-            })?;
-        let parsed: ApiChannelsResponse = serde_json::from_str(&body).map_err(|e| {
-            TubeforgeError::Parse {
+        let body = resp.text().await.map_err(|e| TubeforgeError::Fetch {
+            src: Source::Api,
+            url: url_s.clone(),
+            inner: format!("read body: {e}"),
+        })?;
+        let parsed: ApiChannelsResponse =
+            serde_json::from_str(&body).map_err(|e| TubeforgeError::Parse {
                 src: Source::Api,
                 item: url_s.clone(),
                 inner: format!("json: {e}"),
-            }
-        })?;
+            })?;
         parsed
             .items
             .into_iter()
@@ -274,6 +280,106 @@ impl ApiClient {
                 url: url_s,
                 inner: format!("channel not found for handle {handle}"),
             })
+    }
+
+    /// Fetch up to `max` top-level comments for one video (commentThreads.list,
+    /// 1 unit/call + 1 unit/page of 100 — Google's documented cost; we record
+    /// 1 unit per page fetched, conservatively counting each request).
+    /// `max=0` → default 100 (one page). Only the top-level comment text is
+    /// captured (reply threads are a separate endpoint, skipped — the
+    /// research method uses top comments for demand signals).
+    pub async fn fetch_comments(
+        &self,
+        db: &Db,
+        video_id: &str,
+        max: u64,
+    ) -> Result<Vec<ApiComment>, TubeforgeError> {
+        let mut out = Vec::new();
+        let mut page_token: Option<String> = None;
+        let limit = if max == 0 { 100 } else { max };
+        loop {
+            let (mut comments, next) = self.request_comment_threads(video_id, page_token).await?;
+            // 1 unit per call (LLD §5.4 shared bucket).
+            quota::record_comment_threads_calls(db, 1).await?;
+            out.append(&mut comments);
+            let next_page = next.filter(|_| (out.len() as u64) < limit);
+            match next_page {
+                Some(t) => page_token = Some(t),
+                None => break,
+            }
+            if out.len() as u64 >= limit {
+                break;
+            }
+        }
+        out.truncate(limit as usize);
+        Ok(out)
+    }
+
+    /// One `commentThreads.list` call. `part=snippet` returns the top-level
+    /// comment (id, author, text, likeCount, publishedAt). `maxResults` caps
+    /// at 100 (API max); pagination handled by `fetch_comments`.
+    async fn request_comment_threads(
+        &self,
+        video_id: &str,
+        page_token: Option<String>,
+    ) -> Result<(Vec<ApiComment>, Option<String>), TubeforgeError> {
+        let mut params: Vec<(&str, String)> = vec![
+            ("part", "snippet".to_string()),
+            ("videoId", video_id.to_string()),
+            ("maxResults", "100".to_string()),
+            ("order", "relevance".to_string()),
+            ("textFormat", "plainText".to_string()),
+            ("fields", COMMENT_FIELDS.to_string()),
+            ("key", self.key.clone()),
+        ];
+        if let Some(t) = page_token {
+            params.push(("pageToken", t));
+        }
+        let url = Url::parse_with_params(
+            &format!("{}/commentThreads", self.clients.api_base),
+            &params,
+        )
+        .map_err(|e| TubeforgeError::Fetch {
+            src: Source::Api,
+            url: "commentThreads.list".to_string(),
+            inner: format!("build url: {e}"),
+        })?;
+        let url_s = url.to_string();
+
+        let resp = self.request(&url_s, Source::Api).await?;
+        let body = resp.text().await.map_err(|e| TubeforgeError::Fetch {
+            src: Source::Api,
+            url: url_s.clone(),
+            inner: format!("read body: {e}"),
+        })?;
+        let parsed: CommentThreadsResponse =
+            serde_json::from_str(&body).map_err(|e| TubeforgeError::Parse {
+                src: Source::Api,
+                item: url_s.clone(),
+                inner: format!("json: {e}"),
+            })?;
+
+        let mut comments = Vec::new();
+        for item in parsed.items {
+            let Some(thread_snippet) = item.snippet else {
+                continue;
+            };
+            let Some(comment) = thread_snippet.top_level_comment else {
+                continue;
+            };
+            let comment_id = comment.id.unwrap_or_default();
+            let Some(c) = comment.snippet else {
+                continue;
+            };
+            comments.push(ApiComment {
+                comment_id,
+                author: c.author_display_name.unwrap_or_default(),
+                text: c.text_display.unwrap_or_default(),
+                like_count: c.like_count.unwrap_or(0),
+                published_at: c.published_at,
+            });
+        }
+        Ok((comments, parsed.next_page_token))
     }
 
     /// One `videos.list` call with `fields` projection (bounded payload).
@@ -295,14 +401,11 @@ impl ApiClient {
         let url_s = url.to_string();
 
         let resp = self.request(&url_s, Source::Api).await?;
-        let body = resp
-            .text()
-            .await
-            .map_err(|e| TubeforgeError::Fetch {
-                src: Source::Api,
-                url: url_s.clone(),
-                inner: format!("read body: {e}"),
-            })?;
+        let body = resp.text().await.map_err(|e| TubeforgeError::Fetch {
+            src: Source::Api,
+            url: url_s.clone(),
+            inner: format!("read body: {e}"),
+        })?;
         serde_json::from_str(&body).map_err(|e| TubeforgeError::Parse {
             src: Source::Api,
             item: url_s,
@@ -312,22 +415,22 @@ impl ApiClient {
 
     /// Issue one GET with 3× backoff on 429/5xx/timeout. A 403 with a
     /// `quotaExceeded` body maps to `Quota` (exit 4); other 4xx are `Fetch`.
-    async fn request(
-        &self,
-        url: &str,
-        src: Source,
-    ) -> Result<reqwest::Response, TubeforgeError> {
+    async fn request(&self, url: &str, src: Source) -> Result<reqwest::Response, TubeforgeError> {
         let mut delay = Duration::from_millis(400);
         let mut attempts: u32 = 0;
         loop {
             attempts += 1;
-            let resp = self.clients.http.get(url).send().await.map_err(|e| {
-                TubeforgeError::Fetch {
-                    src,
-                    url: url.to_string(),
-                    inner: e.to_string(),
-                }
-            })?;
+            let resp =
+                self.clients
+                    .http
+                    .get(url)
+                    .send()
+                    .await
+                    .map_err(|e| TubeforgeError::Fetch {
+                        src,
+                        url: url.to_string(),
+                        inner: e.to_string(),
+                    })?;
             let status = resp.status();
             if status.is_success() {
                 return Ok(resp);
@@ -405,6 +508,57 @@ struct ApiVideosResponse {
     items: Vec<ApiVideo>,
 }
 
+/// One top-level comment thread from `commentThreads.list`.
+#[derive(Debug, Clone, Default)]
+pub struct ApiComment {
+    pub comment_id: String,
+    pub author: String,
+    pub text: String,
+    pub like_count: i64,
+    pub published_at: Option<String>,
+}
+
+/// `commentThreads.list` response (fields-projected).
+#[derive(Debug, Deserialize)]
+struct CommentThreadsResponse {
+    #[serde(default)]
+    items: Vec<CommentThreadItem>,
+    #[serde(default, rename = "nextPageToken")]
+    next_page_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CommentThreadItem {
+    #[serde(default)]
+    snippet: Option<CommentThreadSnippet>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CommentThreadSnippet {
+    #[serde(default, rename = "topLevelComment")]
+    top_level_comment: Option<CommentItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CommentItem {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    snippet: Option<CommentSnippet>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CommentSnippet {
+    #[serde(default, rename = "authorDisplayName")]
+    author_display_name: Option<String>,
+    #[serde(default, rename = "textDisplay")]
+    text_display: Option<String>,
+    #[serde(default, rename = "likeCount")]
+    like_count: Option<i64>,
+    #[serde(default, rename = "publishedAt")]
+    published_at: Option<String>,
+}
+
 /// `check availability` response: only existing videos appear in `items`.
 #[derive(Debug, Deserialize)]
 struct AvailabilityResponse {
@@ -444,13 +598,12 @@ async fn parse_availability_body(
         url: url.to_string(),
         inner: format!("read body: {e}"),
     })?;
-    let parsed: AvailabilityResponse = serde_json::from_str(&body).map_err(|e| {
-        TubeforgeError::Parse {
+    let parsed: AvailabilityResponse =
+        serde_json::from_str(&body).map_err(|e| TubeforgeError::Parse {
             src: Source::Api,
             item: url.to_string(),
             inner: format!("json: {e}"),
-        }
-    })?;
+        })?;
     Ok(parsed
         .items
         .into_iter()
@@ -483,12 +636,13 @@ impl ApiVideo {
             channel_title: item.snippet.as_ref().and_then(|s| s.channel_title.clone()),
             title: item.snippet.as_ref().and_then(|s| s.title.clone()),
             description: item.snippet.as_ref().and_then(|s| s.description.clone()),
-            tags: item.snippet.as_ref().map(|s| s.tags.clone()).unwrap_or_default(),
-            category_id: item.snippet.as_ref().and_then(|s| s.category_id.clone()),
-            published_at: item
+            tags: item
                 .snippet
                 .as_ref()
-                .and_then(|s| s.published_at.clone()),
+                .map(|s| s.tags.clone())
+                .unwrap_or_default(),
+            category_id: item.snippet.as_ref().and_then(|s| s.category_id.clone()),
+            published_at: item.snippet.as_ref().and_then(|s| s.published_at.clone()),
             thumb_url: item
                 .snippet
                 .as_ref()

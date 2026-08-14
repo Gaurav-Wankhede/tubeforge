@@ -139,16 +139,130 @@ pub fn sparkline(points: &[Option<i64>]) -> String {
     for (i, p) in points.iter().enumerate() {
         if let Some(v) = p {
             let (x, y) = point(i, *v);
-            out.push_str(&format!(r#"<circle cx="{x:.1}" cy="{y:.1}" r="2" class="dot"/>"#));
+            out.push_str(&format!(
+                r#"<circle cx="{x:.1}" cy="{y:.1}" r="2" class="dot"/>"#
+            ));
         }
     }
     out.push_str("</svg>");
     out
 }
 
+/// Layered architecture diagram for `/docs/architecture` (same spirit as
+/// PRD §11: everything server-rendered, no JS). Five layers top-to-bottom,
+/// each a rounded panel with an accent title and dim caption lines;
+/// vertical arrows with marker-end arrowheads connect them. Static text,
+/// but every caption still passes through `esc` — same contract as the
+/// charts above. Styling rides the dashboard CSS vars via the `.dlay*`,
+/// `.darr`/`.dhead` and `.chip` classes in `base.html`.
+pub fn layers_diagram() -> String {
+    let mut out = String::from(
+        r#"<svg viewBox="0 0 1000 640" width="100%" role="img" aria-label="TubeForge layered architecture" xmlns="http://www.w3.org/2000/svg"><defs><marker id="darrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" class="dhead"/></marker></defs>"#,
+    );
+
+    // (title, caption lines, y, height)
+    let layers: [(&str, &[&str], f64, f64); 5] = [
+        (
+            "1 · Inputs",
+            &["channel RSS · video links (oEmbed) · optional YouTube Data API v3 key"],
+            16.0,
+            66.0,
+        ),
+        (
+            "2 · Fetch",
+            &["RSS · oEmbed · Data API v3 — ETag-cached · quota ledger (1 unit / call)"],
+            102.0,
+            66.0,
+        ),
+        (
+            "3 · Storage + Search",
+            &[
+                "Turso — SQLite-compatible · WAL · schema v3 · migrations 001–003",
+                "tantivy — BM25 title & description index",
+            ],
+            188.0,
+            86.0,
+        ),
+        (
+            "4 · Intelligence",
+            &[
+                "Scoring — 10 SEO + 7 GEO components · env-configurable weights",
+                "Analytics — PageRank · Next Ideas (0.5·seo + 0.3·fit + 0.2·gap)",
+                "keyword rank snapshots · scorecard · health · alerts",
+            ],
+            294.0,
+            106.0,
+        ),
+        ("5 · Outputs", &[], 420.0, 200.0),
+    ];
+    for (title, lines, y, h) in &layers {
+        out.push_str(&format!(
+            r#"<rect x="20" y="{y:.0}" width="960" height="{h:.0}" rx="12" class="dlay"/>"#
+        ));
+        out.push_str(&format!(
+            r#"<text x="40" y="{:.0}" class="dlay-t">{}</text>"#,
+            y + 26.0,
+            esc(title)
+        ));
+        for (i, line) in lines.iter().enumerate() {
+            out.push_str(&format!(
+                r#"<text x="40" y="{:.0}" class="dlay-c">{}</text>"#,
+                y + 52.0 + i as f64 * 20.0,
+                esc(line)
+            ));
+        }
+    }
+
+    // Vertical flow arrows between consecutive layers (marker-end heads).
+    for (y1, y2) in [
+        (82.0, 102.0),
+        (168.0, 188.0),
+        (274.0, 294.0),
+        (400.0, 420.0),
+    ] {
+        out.push_str(&format!(
+            r#"<line x1="500" y1="{y1:.0}" x2="500" y2="{y2:.0}" class="darr" marker-end="url(#darrow)"/>"#
+        ));
+    }
+
+    // Layer 5: five output chips in a row.
+    let chips: [(&str, &str); 5] = [
+        ("CLI --json", "exit codes 0–5"),
+        ("export", "CSV / ZIP"),
+        ("thumbnail render", "chromiumoxide · Tailwind v4"),
+        ("rpc", "stdio JSON-RPC"),
+        ("serve", "dashboard · SSE · CSRF"),
+    ];
+    for (i, (t, s)) in chips.iter().enumerate() {
+        let x = 40.0 + i as f64 * 188.0;
+        out.push_str(&format!(
+            r#"<rect x="{x:.0}" y="470" width="180" height="64" rx="8" class="chip"/>"#
+        ));
+        out.push_str(&format!(
+            r#"<text x="{:.0}" y="496" text-anchor="middle" class="dlay-h">{}</text>"#,
+            x + 90.0,
+            esc(t)
+        ));
+        out.push_str(&format!(
+            r#"<text x="{:.0}" y="516" text-anchor="middle" class="dlay-c">{}</text>"#,
+            x + 90.0,
+            esc(s)
+        ));
+    }
+    out.push_str(
+        r#"<text x="500" y="560" text-anchor="middle" class="dlay-c">one binary — every output is a command on the same engine</text>"#,
+    );
+
+    out.push_str("</svg>");
+    out
+}
+
 fn polyline(seg: &[(f64, f64)]) -> String {
     let pts: Vec<String> = seg.iter().map(|(x, y)| format!("{x:.1},{y:.1}")).collect();
-    format!(r#"<polyline points="{}" fill="none" class="line"/>"#, pts.join(" "))
+    format!(
+        r#"<polyline points="{}" fill="none" class="line"/>"#,
+        pts.join(" ")
+    )
 }
 
 #[cfg(test)]

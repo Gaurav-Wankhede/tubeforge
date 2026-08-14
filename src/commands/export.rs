@@ -16,7 +16,9 @@ use serde_json::{json, Value};
 use crate::config::Config;
 use crate::error::{storage_err, TubeforgeError};
 use crate::export::csv;
-use crate::storage::db::{AlertRow, ChannelRow, IdeaRow, KeywordRow, RankingRow, ScoreRow, VideoRow};
+use crate::storage::db::{
+    AlertRow, ChannelRow, IdeaRow, KeywordRow, RankingRow, ScoreRow, VideoRow,
+};
 use crate::storage::Db;
 
 /// `--format zip|dir`; zip is the default (single archive in `--out`).
@@ -35,11 +37,7 @@ pub const JSON_FILES: [&str; 5] = [
     "manifest.json",
 ];
 
-pub async fn run(
-    cfg: &Config,
-    out: &Path,
-    format: ExportFormat,
-) -> Result<Value, TubeforgeError> {
+pub async fn run(cfg: &Config, out: &Path, format: ExportFormat) -> Result<Value, TubeforgeError> {
     let db = Db::open(&cfg.db_path).await?;
 
     let videos = db.all_videos().await?;
@@ -84,7 +82,8 @@ pub async fn run(
         &csv_files,
     );
 
-    std::fs::create_dir_all(out).map_err(|e| storage_err("IO", format!("create dir {}: {e}", out.display())))?;
+    std::fs::create_dir_all(out)
+        .map_err(|e| storage_err("IO", format!("create dir {}: {e}", out.display())))?;
 
     let (archive, files) = match format {
         ExportFormat::Zip => {
@@ -95,15 +94,18 @@ pub async fn run(
         }
         ExportFormat::Dir => {
             for (name, body) in &csv_files {
-                std::fs::write(out.join(name), body)
-                    .map_err(|e| storage_err("IO", format!("write {}: {e}", out.join(name).display())))?;
+                std::fs::write(out.join(name), body).map_err(|e| {
+                    storage_err("IO", format!("write {}: {e}", out.join(name).display()))
+                })?;
             }
             for (name, v) in &json_files {
                 std::fs::write(
                     out.join(name),
                     pretty(&json_merge(v.clone(), &manifest, name)),
                 )
-                .map_err(|e| storage_err("IO", format!("write {}: {e}", out.join(name).display())))?;
+                .map_err(|e| {
+                    storage_err("IO", format!("write {}: {e}", out.join(name).display()))
+                })?;
             }
             std::fs::write(out.join("manifest.json"), pretty(&manifest))
                 .map_err(|e| storage_err("IO", format!("write manifest.json: {e}")))?;
@@ -136,10 +138,25 @@ pub async fn run(
 /// Recording Location, Topic Categories.
 fn videos_csv(videos: &[VideoRow], channels_by_id: &HashMap<&str, &ChannelRow>) -> String {
     let mut out = csv::record_strs(&[
-        "Video ID", "Title", "Channel ID", "Channel Title", "Description", "Published",
-        "Views", "Likes", "Comments", "Duration", "Category ID", "Category Name",
-        "Language", "Tags", "Source", "Privacy Status", "Recording Date",
-        "Recording Location", "Topic Categories",
+        "Video ID",
+        "Title",
+        "Channel ID",
+        "Channel Title",
+        "Description",
+        "Published",
+        "Views",
+        "Likes",
+        "Comments",
+        "Duration",
+        "Category ID",
+        "Category Name",
+        "Language",
+        "Tags",
+        "Source",
+        "Privacy Status",
+        "Recording Date",
+        "Recording Location",
+        "Topic Categories",
     ]);
     for v in videos {
         let channel_title = v
@@ -188,7 +205,12 @@ fn videos_csv(videos: &[VideoRow], channels_by_id: &HashMap<&str, &ChannelRow>) 
 /// Country.
 fn channels_csv(channels: &[ChannelRow]) -> String {
     let mut out = csv::record_strs(&[
-        "Channel ID", "Title", "Handle", "Subscribers", "Video Count", "Country",
+        "Channel ID",
+        "Title",
+        "Handle",
+        "Subscribers",
+        "Video Count",
+        "Country",
     ]);
     for c in channels {
         out.push_str(&csv::record_strs(&[
@@ -208,7 +230,12 @@ fn channels_csv(channels: &[ChannelRow]) -> String {
 fn tags_csv(videos: &[VideoRow]) -> String {
     let mut out = csv::record_strs(&["Tag", "Video Count", "First Used", "Last Used"]);
     for (tag, (count, first, last)) in tag_census(videos) {
-        out.push_str(&csv::record_strs(&[&tag, &count.to_string(), &first, &last]));
+        out.push_str(&csv::record_strs(&[
+            &tag,
+            &count.to_string(),
+            &first,
+            &last,
+        ]));
     }
     out
 }
@@ -220,7 +247,9 @@ fn tag_census(videos: &[VideoRow]) -> BTreeMap<String, (usize, String, String)> 
     for v in videos {
         if let Ok(tags) = serde_json::from_str::<Vec<String>>(&v.tags) {
             for tag in tags {
-                let e = m.entry(tag).or_insert_with(|| (0, v.published_at.clone(), v.published_at.clone()));
+                let e = m
+                    .entry(tag)
+                    .or_insert_with(|| (0, v.published_at.clone(), v.published_at.clone()));
                 e.0 += 1;
                 if v.published_at < e.1 {
                     e.1 = v.published_at.clone();
@@ -256,7 +285,12 @@ fn keywords_csv(keywords: &[KeywordRow]) -> String {
 /// (keyword, checked_at) composite).
 fn keyword_rankings_csv(rankings: &[RankingRow]) -> String {
     let mut out = csv::record_strs(&[
-        "ID", "Keyword", "Checked At", "Video ID", "Position", "Topics",
+        "ID",
+        "Keyword",
+        "Checked At",
+        "Video ID",
+        "Position",
+        "Topics",
     ]);
     for (i, r) in rankings.iter().enumerate() {
         out.push_str(&csv::record_strs(&[
@@ -286,7 +320,8 @@ fn videos_json(videos: &[VideoRow], channels_by_id: &HashMap<&str, &ChannelRow>)
                 .map(|c| c.title.as_str())
                 .unwrap_or("");
             let tags = serde_json::from_str::<Vec<String>>(&v.tags).unwrap_or_default();
-            let topics = serde_json::from_str::<Vec<String>>(&v.topic_categories).unwrap_or_default();
+            let topics =
+                serde_json::from_str::<Vec<String>>(&v.topic_categories).unwrap_or_default();
             json!({
                 "video_id": v.video_id,
                 "title": v.title,
@@ -318,8 +353,7 @@ fn ideas_json(ideas: &[IdeaRow]) -> Value {
     let rows: Vec<Value> = ideas
         .iter()
         .map(|i| {
-            let rationale =
-                serde_json::from_str::<Value>(&i.rationale).unwrap_or(Value::Null);
+            let rationale = serde_json::from_str::<Value>(&i.rationale).unwrap_or(Value::Null);
             json!({
                 "idea_id": i.idea_id,
                 "title_suggestion": i.title_suggestion,
@@ -356,8 +390,7 @@ fn scores_json(scores: &[ScoreRow]) -> Value {
     let rows: Vec<Value> = scores
         .iter()
         .map(|s| {
-            let components =
-                serde_json::from_str::<Value>(&s.components).unwrap_or(Value::Null);
+            let components = serde_json::from_str::<Value>(&s.components).unwrap_or(Value::Null);
             json!({
                 "video_id": s.video_id,
                 "seo_score": s.seo_score,
@@ -496,8 +529,18 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut db = Db::open(&dir.path().join("e.db")).await.expect("open");
         for v in [
-            mk_video("bbb222ccc33", "[\"rust\",\"databases\"]", "2026-02-01T00:00:00Z", Some("unlisted")),
-            mk_video("aaa111bbb22", "[\"a,b\",\"say \\\"hi\\\"\"]", "2026-01-01T00:00:00Z", Some("public")),
+            mk_video(
+                "bbb222ccc33",
+                "[\"rust\",\"databases\"]",
+                "2026-02-01T00:00:00Z",
+                Some("unlisted"),
+            ),
+            mk_video(
+                "aaa111bbb22",
+                "[\"a,b\",\"say \\\"hi\\\"\"]",
+                "2026-01-01T00:00:00Z",
+                Some("public"),
+            ),
         ] {
             let mut b = db.begin_batch().await.expect("batch");
             b.upsert_video(&v).await.expect("upsert");
@@ -541,24 +584,51 @@ mod tests {
     #[test]
     fn json_files_wrap_payload_with_manifest() {
         let manifest = manifest_json(
-            ExportCounts { videos: 1, channels: 2, tags: 3, keywords: 4, keyword_rankings: 5, ideas: 6, alerts: 7, scores: 8 },
+            ExportCounts {
+                videos: 1,
+                channels: 2,
+                tags: 3,
+                keywords: 4,
+                keyword_rankings: 5,
+                ideas: 6,
+                alerts: 7,
+                scores: 8,
+            },
             &[],
         );
         let wrapped = json_merge(json!([1, 2]), &manifest, "videos.json");
         assert_eq!(wrapped["rows"], json!([1, 2]));
         assert_eq!(wrapped["_manifest"]["file"], "videos.json");
-        assert_eq!(wrapped["_manifest"]["schema_version"], 3);
+        assert_eq!(
+            wrapped["_manifest"]["schema_version"],
+            crate::storage::schema::SCHEMA_VERSION
+        );
     }
 
     #[test]
     fn manifest_carries_counts_and_schema_version() {
         let manifest = manifest_json(
-            ExportCounts { videos: 1, channels: 2, tags: 3, keywords: 4, keyword_rankings: 5, ideas: 6, alerts: 7, scores: 8 },
+            ExportCounts {
+                videos: 1,
+                channels: 2,
+                tags: 3,
+                keywords: 4,
+                keyword_rankings: 5,
+                ideas: 6,
+                alerts: 7,
+                scores: 8,
+            },
             &[],
         );
         assert_eq!(manifest["counts"]["videos"], 1);
         assert_eq!(manifest["counts"]["alerts"], 7);
-        assert_eq!(manifest["schema_version"], 3);
-        assert!(manifest["files"].as_array().unwrap().contains(&json!("videos.json")));
+        assert_eq!(
+            manifest["schema_version"],
+            crate::storage::schema::SCHEMA_VERSION
+        );
+        assert!(manifest["files"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("videos.json")));
     }
 }

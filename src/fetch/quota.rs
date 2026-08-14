@@ -18,7 +18,10 @@ const KEY_DATE: &str = "quota_videos_list_date";
 
 /// Today's quota bucket label in America/Los_Angeles (YYYY-MM-DD).
 pub fn today_pt() -> String {
-    Utc::now().with_timezone(&Los_Angeles).format("%Y-%m-%d").to_string()
+    Utc::now()
+        .with_timezone(&Los_Angeles)
+        .format("%Y-%m-%d")
+        .to_string()
 }
 
 /// Current usage with rollover: if the stored date is not today, usage is 0
@@ -43,7 +46,19 @@ pub async fn used(db: &Db) -> Result<(u64, String), TubeforgeError> {
 /// the stored date is stale).
 pub async fn record_videos_list_calls(db: &Db, calls: u64) -> Result<(), TubeforgeError> {
     let (used, today) = used(db).await?;
-    db.meta_set(KEY_USED, &(used.saturating_add(calls)).to_string()).await?;
+    db.meta_set(KEY_USED, &(used.saturating_add(calls)).to_string())
+        .await?;
+    db.meta_set(KEY_DATE, &today).await?;
+    Ok(())
+}
+
+/// Record `calls` units for `commentThreads.list` today. Shares the same
+/// daily bucket as `videos.list` (one 10,000/day budget across the API —
+/// LLD §5.4) so the ledger stays a single number.
+pub async fn record_comment_threads_calls(db: &Db, calls: u64) -> Result<(), TubeforgeError> {
+    let (used, today) = used(db).await?;
+    db.meta_set(KEY_USED, &(used.saturating_add(calls)).to_string())
+        .await?;
     db.meta_set(KEY_DATE, &today).await?;
     Ok(())
 }
@@ -58,11 +73,7 @@ pub struct Preflight {
     pub warn: bool,
 }
 
-pub async fn preflight(
-    db: &Db,
-    projected: u64,
-    warn_at: u64,
-) -> Result<Preflight, TubeforgeError> {
+pub async fn preflight(db: &Db, projected: u64, warn_at: u64) -> Result<Preflight, TubeforgeError> {
     let (used, _) = used(db).await?;
     let remaining = DAILY_LIMIT.saturating_sub(used);
     let after = used.saturating_add(projected);

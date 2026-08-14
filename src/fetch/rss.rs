@@ -84,14 +84,11 @@ pub async fn fetch_feed(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
 
-    let body = resp
-        .text()
-        .await
-        .map_err(|e| TubeforgeError::Fetch {
-            src: Source::Rss,
-            url: url.clone(),
-            inner: format!("read body: {e}"),
-        })?;
+    let body = resp.text().await.map_err(|e| TubeforgeError::Fetch {
+        src: Source::Rss,
+        url: url.clone(),
+        inner: format!("read body: {e}"),
+    })?;
 
     let feed = parse_feed(&body).map_err(|e| TubeforgeError::Parse {
         src: Source::Rss,
@@ -99,7 +96,10 @@ pub async fn fetch_feed(
         inner: e,
     })?;
 
-    Ok(FeedResult::Feed { feed, etag: new_etag })
+    Ok(FeedResult::Feed {
+        feed,
+        etag: new_etag,
+    })
 }
 
 fn percent_encode(input: &str) -> String {
@@ -126,9 +126,9 @@ pub fn parse_feed(xml: &str) -> Result<RssFeed, String> {
     let mut entry = RssVideo::default();
     let mut in_entry = false;
     let mut cur: Vec<u8> = Vec::new(); // current open element (local name)
-    // Text accumulates across events: quick-xml 0.41 emits entity references
-    // as separate `GeneralRef` events, splitting text (`"a &amp; b"` arrives
-    // as Text("a "), GeneralRef("amp"), Text(" b")). We reassemble at End.
+                                       // Text accumulates across events: quick-xml 0.41 emits entity references
+                                       // as separate `GeneralRef` events, splitting text (`"a &amp; b"` arrives
+                                       // as Text("a "), GeneralRef("amp"), Text(" b")). We reassemble at End.
     let mut pending: String = String::new();
 
     loop {

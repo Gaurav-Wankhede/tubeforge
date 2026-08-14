@@ -29,9 +29,10 @@ impl AssetDir {
     /// Create `<data>/assets/<batch>-<pid>-<seq>/` for a new render.
     pub fn create(data_dir: &Path, keep: bool) -> Result<AssetDir, TubeforgeError> {
         let seq = RENDER_SEQ.fetch_add(1, Ordering::Relaxed);
-        let path = data_dir
-            .join("assets")
-            .join(format!("{}-{}-{}", batch_id(), std::process::id(), seq));
+        let path =
+            data_dir
+                .join("assets")
+                .join(format!("{}-{}-{}", batch_id(), std::process::id(), seq));
         std::fs::create_dir_all(&path).map_err(|e| {
             storage_err(
                 "ASSETS_CREATE",
@@ -92,7 +93,10 @@ mod tests {
         drop(dir); // render succeeded, scope ends
 
         assert!(!path.exists(), "assets dir must be deleted on success");
-        assert_eq!(std::fs::read_dir(root.path()).expect("read root").count(), 0);
+        assert_eq!(
+            std::fs::read_dir(root.path()).expect("read root").count(),
+            0
+        );
     }
 
     /// The error path: the guard is alive when the render fails; the early

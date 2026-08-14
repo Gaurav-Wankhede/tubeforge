@@ -5,8 +5,8 @@ use std::time::Instant;
 
 use clap::Parser;
 use tubeforge::cli::{
-    CheckKind, Cli, Command, ExportFormat as CliExportFormat, FilmotKind, IngestKind,
-    KeywordsKind, ThumbnailKind,
+    CheckKind, Cli, Command, CommentsKind, ExportFormat as CliExportFormat, FilmotKind, IngestKind,
+    KeywordsKind, TagsKind, ThumbnailKind, TranscriptKind,
 };
 use tubeforge::commands;
 use tubeforge::config;
@@ -46,11 +46,14 @@ fn init_tracing(cli: &Cli) {
 
 /// Full command pipeline. Returns the process exit code.
 async fn run(cli: Cli, start: Instant) -> i32 {
-    // `serve` is a long-running server: it never emits the JSON envelope
-    // (LLD §4.2 stdout purity), so it is dispatched outside the envelope
-    // pipeline entirely.
-    if let Command::Serve { .. } = &cli.command {
-        return run_serve(&cli).await;
+    // `serve` and `rpc` are long-running processes: they never emit the JSON
+    // envelope (LLD §4.2 stdout purity — `serve` keeps stdout empty, `rpc`
+    // reserves stdout for JSON-RPC responses), so they are dispatched outside
+    // the envelope pipeline entirely.
+    match &cli.command {
+        Command::Serve { .. } => return run_serve(&cli).await,
+        Command::Rpc => return run_rpc(&cli).await,
+        _ => {}
     }
     let json = cli.json;
     let result = dispatch(&cli).await;
@@ -99,6 +102,25 @@ async fn run_serve(cli: &Cli) -> i32 {
     }
 }
 
+/// `rpc` bootstrap: config load + stdio JSON-RPC bridge; stdout is reserved
+/// for RPC responses, all diagnostics go to stderr, exit 0 on stdin EOF.
+async fn run_rpc(cli: &Cli) -> i32 {
+    let cfg = match config::load(cli.config.as_deref(), cli.db_path.as_deref()) {
+        Ok(c) => c,
+        Err(err) => {
+            eprintln!("{}: {}", err.code(), err);
+            return i32::from(&err);
+        }
+    };
+    match commands::rpc::run(&cfg).await {
+        Ok(()) => 0,
+        Err(err) => {
+            eprintln!("{}: {}", err.code(), err);
+            i32::from(&err)
+        }
+    }
+}
+
 async fn dispatch(cli: &Cli) -> Result<(serde_json::Value, Option<QuotaInfo>), TubeforgeError> {
     let cfg = config::load(cli.config.as_deref(), cli.db_path.as_deref())?;
     tracing::debug!(db_path = %cfg.db_path.display(), "config loaded");
@@ -106,12 +128,16 @@ async fn dispatch(cli: &Cli) -> Result<(serde_json::Value, Option<QuotaInfo>), T
     let data = match &cli.command {
         Command::Init => commands::init::run(&cfg).await?,
         Command::Ingest { kind } => match kind {
-            IngestKind::Channels { refs, api, no_backup } => {
-                commands::ingest::run_channels(&cfg, refs, *api, *no_backup).await?
-            }
-            IngestKind::Links { file, api, no_backup } => {
-                commands::ingest::run_links(&cfg, file.clone(), *api, *no_backup).await?
-            }
+            IngestKind::Channels {
+                refs,
+                api,
+                no_backup,
+            } => commands::ingest::run_channels(&cfg, refs, *api, *no_backup).await?,
+            IngestKind::Links {
+                file,
+                api,
+                no_backup,
+            } => commands::ingest::run_links(&cfg, file.clone(), *api, *no_backup).await?,
         },
         Command::Refresh { channel, no_backup } => {
             commands::refresh::run(&cfg, channel, *no_backup).await?
@@ -143,20 +169,72 @@ async fn dispatch(cli: &Cli) -> Result<(serde_json::Value, Option<QuotaInfo>), T
         Command::Keywords { kind } => {
             let db = Db::open(&cfg.db_path).await?;
             match kind {
-                KeywordsKind::Add { keywords } => commands::keywords::run_add(&db, keywords).await?,
+                KeywordsKind::Add { keywords } => {
+                    commands::keywords::run_add(&db, keywords).await?
+                }
                 KeywordsKind::Check => commands::keywords::run_check(&cfg).await?,
                 KeywordsKind::Report => commands::keywords::run_report(&db).await?,
+                KeywordsKind::Inspect { keyword, serp } => {
+                    commands::keywords::run_inspect(&cfg, keyword, *serp).await?
+                }
+                KeywordsKind::Research {
+                    topics,
+                    serp,
+                    dedupe,
+                } => commands::keywords::run_research(&cfg, topics, *serp, *dedupe).await?,
+                KeywordsKind::Discover {
+                    topic,
+                    serp,
+                    enrich,
+                    transcripts,
+                } => {
+                    commands::keywords::run_discover(&cfg, topic, *serp, *enrich, *transcripts)
+                        .await?
+                }
             }
         }
         Command::Scorecard { channel } => commands::scorecard::run(&cfg, channel).await?,
+        Command::Tags { kind } => match kind {
+            TagsKind::Backfill => commands::tags::run_backfill(&cfg).await?,
+            TagsKind::Analyze => commands::tags::run_analyze(&cfg).await?,
+        },
+        Command::Transcript { kind } => match kind {
+            TranscriptKind::Get { video_id, lang } => {
+                commands::transcript::run_get(&cfg, video_id, lang).await?
+            }
+            TranscriptKind::List => commands::transcript::run_list(&cfg).await?,
+            TranscriptKind::Clear => commands::transcript::run_clear(&cfg).await?,
+        },
+        Command::Metadata { video_id } => commands::metadata::run(&cfg, video_id).await?,
+        Command::Comments { kind } => match kind {
+            CommentsKind::Get { video_id, max, api } => {
+                commands::comments::run_get(&cfg, video_id, *max, *api).await?
+            }
+            CommentsKind::List { video_id } => commands::comments::run_list(&cfg, video_id).await?,
+            CommentsKind::Clear => commands::comments::run_clear(&cfg).await?,
+        },
+        Command::Gaps { channel, markdown } => {
+            commands::gaps::run_gaps(&cfg, channel, *markdown).await?
+        }
+        Command::Outliers { channel } => commands::gaps::run_outliers(&cfg, channel).await?,
         Command::Health => commands::health::run(&cfg).await?,
+        Command::Analyze { topic, serp } => commands::analyze::run(&cfg, topic, *serp).await?,
+        Command::Forecast {
+            keyword,
+            horizon,
+            channels,
+        } => {
+            commands::forecast::run_forecast(&cfg, keyword.as_deref(), *horizon, *channels).await?
+        }
+        Command::Suggest { topic, horizon } => {
+            commands::forecast::run_suggest(&cfg, topic, *horizon).await?
+        }
         Command::Alerts { action, mark_read } => {
             commands::alerts::run(&cfg, *action, *mark_read).await?
         }
         Command::Reindex => commands::reindex::run(&cfg).await?,
         Command::Backup { to } => commands::backup::run(&cfg, to.clone()).await?,
         Command::Quota => commands::quota::run(&cfg).await?,
-        Command::Mcp => commands::mcp::run(&cfg).await?,
         Command::Thumbnail { kind } => match kind {
             ThumbnailKind::Render {
                 video_id,
@@ -183,7 +261,8 @@ async fn dispatch(cli: &Cli) -> Result<(serde_json::Value, Option<QuotaInfo>), T
             CheckKind::Availability { video_id } => {
                 commands::availability::run(&cfg, video_id).await?
             }
-        }
+        },
+        Command::VideosDedupe => commands::videos::run_dedupe(&cfg).await?,
         Command::Export { out, format } => {
             let fmt = match format {
                 CliExportFormat::Zip => commands::export::ExportFormat::Zip,
@@ -194,8 +273,27 @@ async fn dispatch(cli: &Cli) -> Result<(serde_json::Value, Option<QuotaInfo>), T
         Command::Filmot { kind } => match kind {
             FilmotKind::Get { video_id } => commands::filmot::run_get(video_id).await?,
         },
+        Command::Prompt {
+            video_id,
+            multi,
+            comments,
+            out,
+            json,
+        } => {
+            commands::prompt::run(
+                &cfg,
+                video_id.as_deref(),
+                multi,
+                *comments,
+                out.as_ref(),
+                *json,
+            )
+            .await?
+        }
         // Serve never reaches the envelope pipeline (special-cased in run()).
         Command::Serve { .. } => unreachable!("serve is handled before dispatch"),
+        // Rpc is long-running stdio; also special-cased in run().
+        Command::Rpc => unreachable!("rpc is handled before dispatch"),
     };
 
     // Attach the quota ledger to `meta.quota` for commands that touch the
@@ -204,7 +302,10 @@ async fn dispatch(cli: &Cli) -> Result<(serde_json::Value, Option<QuotaInfo>), T
         Command::Ingest { .. }
         | Command::Refresh { .. }
         | Command::Quota
-        | Command::Check { .. } => quota_meta(&cfg).await,
+        | Command::Check { .. }
+        | Command::Comments {
+            kind: CommentsKind::Get { api: true, .. },
+        } => quota_meta(&cfg).await,
         _ => None,
     };
 

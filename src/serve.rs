@@ -21,6 +21,7 @@
 pub mod api;
 pub mod csrf;
 pub mod rpc;
+pub mod stdio;
 pub mod svg;
 pub mod templates;
 pub mod web;

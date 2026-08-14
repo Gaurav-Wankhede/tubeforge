@@ -11,9 +11,9 @@ use crate::storage::Db;
 pub async fn run(cfg: &Config) -> Result<Value, TubeforgeError> {
     let db = Db::open(&cfg.db_path).await?;
     let stale_days: u32 = match std::env::var("TUBEFORGE_STALE_DAYS") {
-        Ok(v) => v
-            .parse()
-            .map_err(|_| TubeforgeError::Config(format!("TUBEFORGE_STALE_DAYS not a number: {v}")))?,
+        Ok(v) => v.parse().map_err(|_| {
+            TubeforgeError::Config(format!("TUBEFORGE_STALE_DAYS not a number: {v}"))
+        })?,
         Err(_) => DEFAULT_STALE_DAYS,
     };
     reports::health(&db, stale_days).await

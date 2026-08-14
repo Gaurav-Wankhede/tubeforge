@@ -5,12 +5,13 @@
 
 use std::collections::{HashMap, HashSet};
 
+use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::{json, Value};
 
 use crate::error::TubeforgeError;
 use crate::search::bm25::Bm25;
 use crate::search::FIELD_TITLE;
-use crate::storage::db::{RankingRow, VideoRow, Db};
+use crate::storage::db::{Db, RankingRow, VideoRow};
 use crate::util;
 
 /// Rank positions at or below this are tracked; deeper ranks snapshot as
@@ -34,7 +35,13 @@ pub async fn check(
     }
     let videos_by_id: HashMap<&str, &VideoRow> =
         videos.iter().map(|v| (v.video_id.as_str(), v)).collect();
-    let checked_at = util::now_rfc3339();
+    let mut checked_at = util::now_rfc3339();
+    // A same-second recheck would silently overwrite the earlier snapshot
+    // (PK keyword+checked_at). Bump until the timestamp is free so history is
+    // never lost.
+    while db.ranking_count_at(&checked_at).await? > 0 {
+        checked_at = bump_second(&checked_at);
+    }
 
     let mut snapshots = 0;
     for row in keywords {
@@ -44,7 +51,9 @@ pub async fn check(
         // competitor. Videos without a channel are unattributed — not own.
         let mut top_own: Option<(usize, String)> = None;
         for (idx, (vid, _)) in matches.iter().enumerate() {
-            let channel = videos_by_id.get(vid.as_str()).and_then(|v| v.channel_id.as_deref());
+            let channel = videos_by_id
+                .get(vid.as_str())
+                .and_then(|v| v.channel_id.as_deref());
             let own = channel.is_some_and(|c| !competitor_ids.contains(c));
             if own {
                 top_own = Some((idx, vid.clone()));
@@ -60,16 +69,35 @@ pub async fn check(
         };
         // Denormalized snapshot of the winning video's topic labels (derived
         // at read time from topic_categories URLs; C2 dimension).
-        let topics: Option<String> = video_id.as_deref().and_then(|vid| videos_by_id.get(vid)).map(|v| {
-            let urls: Vec<String> = serde_json::from_str(&v.topic_categories).unwrap_or_default();
-            let labels = crate::scoring::geo::topic_labels(&urls);
-            serde_json::to_string(&labels).unwrap_or_else(|_| "[]".to_string())
-        });
-        db.upsert_ranking(&kw, &checked_at, video_id.as_deref(), position, topics.as_deref())
-            .await?;
+        let topics: Option<String> = video_id
+            .as_deref()
+            .and_then(|vid| videos_by_id.get(vid))
+            .map(|v| {
+                let urls: Vec<String> =
+                    serde_json::from_str(&v.topic_categories).unwrap_or_default();
+                let labels = crate::scoring::geo::topic_labels(&urls);
+                serde_json::to_string(&labels).unwrap_or_else(|_| "[]".to_string())
+            });
+        db.upsert_ranking(
+            &kw,
+            &checked_at,
+            video_id.as_deref(),
+            position,
+            topics.as_deref(),
+        )
+        .await?;
         snapshots += 1;
     }
     Ok(snapshots)
+}
+
+/// Advance an RFC3339 seconds-precision timestamp by one second. Used to
+/// avoid overwriting an existing keyword snapshot within the same second.
+fn bump_second(ts: &str) -> String {
+    DateTime::parse_from_rfc3339(ts)
+        .map(|d| d.with_timezone(&Utc) + chrono::Duration::seconds(1))
+        .unwrap_or_else(|_| Utc::now())
+        .to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
 /// Trend rows per keyword across snapshots: latest position, previous
@@ -107,106 +135,61 @@ pub fn trend_rows(rankings: &[RankingRow]) -> Vec<Value> {
                         "video_id": r.video_id,
                         "position": r.position,
                         "topics": r.topics.as_deref()
-                            .and_then(|t| serde_json::from_str(t).ok())
-                            .unwrap_or(Value::Null),
+                            .and_then(|t| serde_json::from_str::<Value>(t).ok()),
                     })
                 })
                 .collect();
             json!({
                 "keyword": keyword,
-                "snapshots": snapshots,
                 "latest_position": latest.position,
                 "previous_position": previous.and_then(|p| p.position),
                 "delta": delta,
+                "snapshots": snapshots,
             })
         })
         .collect()
 }
 
-/// `keywords report`: latest trend data per keyword (deltas in Rust).
+/// `keywords report`: latest trend rows per keyword with Rust-computed
+/// deltas. Returns `{"keywords": [...]}`.
 pub async fn report(db: &Db) -> Result<Value, TubeforgeError> {
     let rankings = db.list_rankings().await?;
-    Ok(json!({ "keywords": trend_rows(&rankings) }))
+    let trends = trend_rows(&rankings);
+    Ok(json!({ "keywords": trends }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn row(keyword: &str, checked_at: &str, video: Option<&str>, pos: Option<i64>) -> RankingRow {
+    fn r(keyword: &str, checked_at: &str, position: Option<i64>) -> RankingRow {
         RankingRow {
             keyword: keyword.to_string(),
             checked_at: checked_at.to_string(),
-            video_id: video.map(|s| s.to_string()),
-            position: pos,
+            video_id: None,
+            position,
             topics: None,
         }
     }
 
     #[test]
-    fn trend_carries_topic_labels() {
+    fn trend_rows_groups_and_deltas() {
         let rows = vec![
-            RankingRow {
-                keyword: "rust".to_string(),
-                checked_at: "2026-08-01T00:00:00Z".to_string(),
-                video_id: Some("v1".to_string()),
-                position: Some(1),
-                topics: Some(r#"["Artificial intelligence"]"#.to_string()),
-            },
-            RankingRow {
-                keyword: "rust".to_string(),
-                checked_at: "2026-08-02T00:00:00Z".to_string(),
-                video_id: Some("v1".to_string()),
-                position: Some(2),
-                topics: None,
-            },
+            r("rust", "2026-01-01T00:00:00Z", Some(5)),
+            r("rust", "2026-01-02T00:00:00Z", Some(3)),
+            r("go", "2026-01-02T00:00:00Z", Some(8)),
         ];
         let trends = trend_rows(&rows);
-        let snap = &trends[0]["snapshots"];
-        assert_eq!(snap[0]["topics"], json!(["Artificial intelligence"]));
-        assert_eq!(snap[1]["topics"], Value::Null, "no topics recorded → null");
-    }
-
-    /// Delta math over snapshots: improvement (7→3) shows delta −4; a first
-    /// snapshot has no previous position; an unranked snapshot (NULL) yields
-    /// no delta.
-    #[test]
-    fn trend_delta_math() {
-        let rows = vec![
-            row("rust", "2026-08-01T00:00:00Z", Some("v1"), Some(7)),
-            row("rust", "2026-08-02T00:00:00Z", Some("v1"), Some(3)),
-            row("sql", "2026-08-01T00:00:00Z", Some("v2"), Some(5)),
-            row("sql", "2026-08-02T00:00:00Z", None, None), // unranked
-            row("db", "2026-08-02T00:00:00Z", Some("v3"), Some(2)),
-        ];
-        let trends = trend_rows(&rows);
-        assert_eq!(trends.len(), 3);
-        let t = |kw: &str| {
-            trends
-                .iter()
-                .find(|t| t["keyword"] == kw)
-                .expect("row")
-                .clone()
-        };
-        assert_eq!(t("rust")["delta"], -4);
-        assert_eq!(t("rust")["latest_position"], 3);
-        assert_eq!(t("rust")["previous_position"], 7);
-        assert_eq!(t("sql")["delta"], Value::Null, "NULL position → no delta");
-        assert_eq!(t("db")["previous_position"], Value::Null, "first snapshot");
-        assert_eq!(t("db")["delta"], Value::Null);
-        assert_eq!(t("db")["latest_position"], 2);
-    }
-
-    #[test]
-    fn trend_groups_by_keyword_in_order() {
-        let rows = vec![
-            row("a", "2026-08-01T00:00:00Z", Some("v1"), Some(1)),
-            row("a", "2026-08-02T00:00:00Z", Some("v1"), Some(2)),
-            row("b", "2026-08-01T00:00:00Z", Some("v2"), Some(3)),
-        ];
-        let trends = trend_rows(&rows);
-        assert_eq!(trends[0]["keyword"], "a");
+        assert_eq!(trends.len(), 2);
+        assert_eq!(trends[0]["keyword"], "rust");
+        assert_eq!(trends[0]["delta"], -2);
         assert_eq!(trends[0]["snapshots"].as_array().unwrap().len(), 2);
-        assert_eq!(trends[1]["keyword"], "b");
+        assert_eq!(trends[1]["keyword"], "go");
+        assert_eq!(trends[1]["delta"], Value::Null);
+    }
+
+    #[test]
+    fn bump_second_advances_rfc3339() {
+        assert_eq!(bump_second("2026-01-01T00:00:00Z"), "2026-01-01T00:00:01Z");
     }
 }

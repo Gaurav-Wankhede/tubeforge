@@ -11,7 +11,7 @@ use crate::error::TubeforgeError;
 use crate::scoring::weights::Weights;
 use crate::search::bm25::Bm25;
 use crate::search::open_or_create;
-use crate::storage::db::{VideoRow, Db};
+use crate::storage::db::{Db, VideoRow};
 
 /// Valid idea statuses (LLD §3.1 default `draft`).
 pub const STATUSES: [&str; 3] = ["draft", "saved", "discarded"];
@@ -92,9 +92,11 @@ pub async fn run(
 /// The source video's category rendered by display name (A3); unknown or
 /// absent category ids → None.
 fn category_of(video: Option<&VideoRow>) -> Option<String> {
-    video
-        .and_then(|v| v.category_id.as_deref())
-        .map(|cid| crate::categories::category_name(cid).unwrap_or(cid).to_string())
+    video.and_then(|v| v.category_id.as_deref()).map(|cid| {
+        crate::categories::category_name(cid)
+            .unwrap_or(cid)
+            .to_string()
+    })
 }
 
 #[cfg(test)]
@@ -107,7 +109,10 @@ mod tests {
             category_id: category.map(String::from),
             ..Default::default()
         };
-        assert_eq!(category_of(Some(&mk(Some("42")))), Some("Shorts".to_string()));
+        assert_eq!(
+            category_of(Some(&mk(Some("42")))),
+            Some("Shorts".to_string())
+        );
         assert_eq!(
             category_of(Some(&mk(Some("28")))),
             Some("Science & Technology".to_string())

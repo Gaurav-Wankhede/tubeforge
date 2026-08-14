@@ -3,7 +3,7 @@
 //! Global flags: `--json`, `--verbose`, `--db-path`, `--config <env file>`.
 //! Subcommands: `init`, `ingest channels/links`, `refresh`, `score`, `ideas`,
 //! `keywords add|check|report`, `scorecard`, `health`, `alerts`, `reindex`,
-//! `backup`, `quota`, `mcp`, `thumbnail render|list-templates`,
+//! `backup`, `quota`, `thumbnail render|list-templates`,
 //! `check availability`, `export`, `filmot get`.
 
 use std::path::PathBuf;
@@ -90,6 +90,43 @@ pub enum Command {
         #[command(subcommand)]
         kind: KeywordsKind,
     },
+    /// Tag analysis (LLD §8.3 extension): backfill normalized tag tables.
+    Tags {
+        #[command(subcommand)]
+        kind: TagsKind,
+    },
+    /// Transcript extraction via yt-dlp (Phase 6.5 content layer).
+    Transcript {
+        #[command(subcommand)]
+        kind: TranscriptKind,
+    },
+    /// yt-dlp metadata enrichment (Phase 6.6): heatmap (audience retention),
+    /// live stats, channel followers — persisted for stored videos.
+    Metadata {
+        /// The 11-char YouTube video id.
+        #[arg(long, value_name = "ID", required = true)]
+        video_id: String,
+    },
+    /// Fetch top-level comments via commentThreads.list (quota-guarded).
+    Comments {
+        #[command(subcommand)]
+        kind: CommentsKind,
+    },
+    /// Competitor gap mining (Phase 6.5): outliers + coverage map.
+    Gaps {
+        /// Restrict to these channel ids (default: all).
+        #[arg(long, value_name = "ID")]
+        channel: Vec<String>,
+        /// Emit a markdown gap report instead of the JSON envelope.
+        #[arg(long, action = ArgAction::SetTrue)]
+        markdown: bool,
+    },
+    /// Outlier videos (≥3x channel mean views) — proven demand (Method A).
+    Outliers {
+        /// Restrict to these channel ids (default: all).
+        #[arg(long, value_name = "ID")]
+        channel: Vec<String>,
+    },
     /// Competitor comparison vs the median of the set (LLD §8.4).
     Scorecard {
         /// Restrict to these channel ids (default: competitors).
@@ -98,6 +135,40 @@ pub enum Command {
     },
     /// Data completeness, quota, integrity, freshness (LLD §8.4).
     Health,
+    /// Precise topic analysis for the own channel: realtime SERP scan +
+    /// demand-supply gap + auto-drafted title/description/tags.
+    Analyze {
+        /// The topic to analyze.
+        #[arg(value_name = "TOPIC", required = true)]
+        topic: String,
+        /// SERP size for the scan (default 6).
+        #[arg(long, value_name = "N", default_value_t = 6)]
+        serp: u64,
+    },
+    /// Future forecasting over stored keyword-research history (LLD §8 +
+    /// forecast layer): time-series extrapolation of opportunity/competition/
+    /// views → rising/flat/falling verdict + next-period estimate.
+    Forecast {
+        /// Optional keyword to forecast. Empty = forecast all researched keywords.
+        #[arg(value_name = "KEYWORD")]
+        keyword: Option<String>,
+        /// Forecast horizon in days (default 7).
+        #[arg(long, value_name = "DAYS", default_value_t = 7)]
+        horizon: u64,
+        /// Also forecast channel growth from channel_snapshots history.
+        #[arg(long, action = ArgAction::SetTrue)]
+        channels: bool,
+    },
+    /// Auto-draft Title / Description / Tags for a future video from TubeForge
+    /// research + forecast data.
+    Suggest {
+        /// The topic to package (must be a researched keyword).
+        #[arg(value_name = "TOPIC", required = true)]
+        topic: String,
+        /// Forecast horizon in days (default 7).
+        #[arg(long, value_name = "DAYS", default_value_t = 7)]
+        horizon: u64,
+    },
     /// Brand/coverage/quota/integrity alerts (LLD §8.4).
     Alerts {
         #[command(subcommand)]
@@ -116,8 +187,6 @@ pub enum Command {
     },
     /// Show YouTube API usage from the meta ledger.
     Quota,
-    /// Print the MCP server config snippet (tursodb <db> --mcp).
-    Mcp,
     /// Generate thumbnails from HTML+Tailwind templates (Phase 3, PRD §5.7).
     Thumbnail {
         #[command(subcommand)]
@@ -129,6 +198,9 @@ pub enum Command {
         #[command(subcommand)]
         kind: CheckKind,
     },
+    /// Collapse duplicate videos (same channel + title) into one record,
+    /// repointing scores/tags/transcripts/comments to the winner.
+    VideosDedupe,
     /// Export the local dataset (CSVs + JSON arrays) as a zip or directory.
     Export {
         /// Output directory (zip archive lands here in --format zip).
@@ -143,6 +215,26 @@ pub enum Command {
         #[command(subcommand)]
         kind: FilmotKind,
     },
+    /// Build an AI gap-mining prompt bundle (Phase 6.5): transcript +
+    /// metadata (+ comments) wrapped in the research templates. Output is a
+    /// markdown file ready to paste into OpenCode / Claude Code / Codex.
+    Prompt {
+        /// Stored video id to mine.
+        #[arg(long, value_name = "ID")]
+        video_id: Option<String>,
+        /// Multiple video ids → the Multi-Video Pattern template.
+        #[arg(long, value_name = "ID", value_delimiter = ',')]
+        multi: Vec<String>,
+        /// Include stored comments (fetched via `comments get`).
+        #[arg(long, action = ArgAction::SetTrue)]
+        comments: bool,
+        /// Output file (default: stdout).
+        #[arg(long, value_name = "PATH")]
+        out: Option<PathBuf>,
+        /// Emit structured JSON instead of the markdown bundle.
+        #[arg(long, action = ArgAction::SetTrue)]
+        json: bool,
+    },
     /// Serve the local HTMX dashboard (PRD §5.4 deferred item).
     ///
     /// Long-running server: binds loopback only, never emits the JSON
@@ -155,6 +247,13 @@ pub enum Command {
         #[arg(long, value_name = "HOST", default_value = "127.0.0.1")]
         host: String,
     },
+    /// Serve JSON-RPC over stdio for agent harnesses (OpenCode, Claude Code,
+    /// Codex, Hermes, Pi Agent, ...).
+    ///
+    /// Long-running bridge: reads one JSON-RPC request per stdin line, streams
+    /// responses (progress/result/error) to stdout. stdout is reserved for
+    /// responses — it never emits the JSON envelope.
+    Rpc,
 }
 
 #[derive(Debug, Subcommand)]
@@ -163,7 +262,6 @@ pub enum CheckKind {
     /// YOUTUBE_API_KEY); missing videos raise `video_unavailable` alerts.
     Availability {
         /// Restrict the check to these video ids (default: all stored).
-        #[arg(long, value_name = "ID")]
         video_id: Vec<String>,
     },
 }
@@ -248,6 +346,44 @@ pub enum KeywordsKind {
     Check,
     /// Trend report across snapshots (deltas computed in Rust).
     Report,
+    /// VidIQ-style research for one keyword: SERP demand proxy, competition,
+    /// opportunity score, related keywords (keyless yt-dlp + autocomplete).
+    Inspect {
+        /// The keyword to research.
+        #[arg(value_name = "KW", required = true)]
+        keyword: String,
+        /// SERP size for demand/competition analysis (default 10).
+        #[arg(long, value_name = "N", default_value_t = 10)]
+        serp: u64,
+    },
+    /// Batch research for many topics (loops `inspect`, persisting each).
+    Research {
+        /// Topics to research (repeatable).
+        #[arg(value_name = "TOPIC", required = true)]
+        topics: Vec<String>,
+        /// SERP size per topic (default 6 — ~17s each).
+        #[arg(long, value_name = "N", default_value_t = 6)]
+        serp: u64,
+        /// Dedupe videos after the batch (same channel + title → one record).
+        #[arg(long, action = ArgAction::SetTrue)]
+        dedupe: bool,
+    },
+    /// Dynamic search-driven discovery: top-ranking channels & videos for a
+    /// searched topic, registered as competitors + enriched for trends.
+    Discover {
+        /// The topic to discover (the search text).
+        #[arg(value_name = "TOPIC", required = true)]
+        topic: String,
+        /// SERP size (default 10 — top-ranking videos for the search).
+        #[arg(long, value_name = "N", default_value_t = 10)]
+        serp: u64,
+        /// Fetch per-video retention heatmaps + live stats (slower, richer).
+        #[arg(long, action = ArgAction::SetTrue)]
+        enrich: bool,
+        /// Also fetch per-video transcripts (feeds gap-mining prompts).
+        #[arg(long, action = ArgAction::SetTrue)]
+        transcripts: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Subcommand)]
@@ -255,6 +391,57 @@ pub enum AlertsAction {
     /// List alerts without re-evaluating the rules.
     List,
     /// Delete all alerts.
+    Clear,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Subcommand)]
+pub enum TagsKind {
+    /// Populate tags/video_tags/competitor_tags from stored video data.
+    Backfill,
+    /// Aggregate per-channel tag stats into competitor_tags (the gaps
+    /// table). Run after backfill so the mapping tables are populated.
+    Analyze,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum TranscriptKind {
+    /// Fetch + store one video's transcript (yt-dlp, public captions).
+    Get {
+        /// The 11-char YouTube video id.
+        #[arg(long, value_name = "ID", required = true)]
+        video_id: String,
+        /// Caption language (default "en").
+        #[arg(long, value_name = "LANG", default_value = "en")]
+        lang: String,
+    },
+    /// List stored transcripts.
+    List,
+    /// Delete all stored transcripts.
+    Clear,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum CommentsKind {
+    /// Fetch top-level comments (yt-dlp keyless default; `--api` uses the
+    /// YouTube Data API instead — needs YOUTUBE_API_KEY).
+    Get {
+        /// The 11-char YouTube video id.
+        #[arg(long, value_name = "ID", required = true)]
+        video_id: String,
+        /// Max comments (default 100 = one page).
+        #[arg(long, value_name = "N", default_value_t = 100)]
+        max: u64,
+        /// Force the YouTube Data API path (needs YOUTUBE_API_KEY).
+        #[arg(long, action = ArgAction::SetTrue)]
+        api: bool,
+    },
+    /// List stored comments for one video.
+    List {
+        /// The 11-char YouTube video id.
+        #[arg(long, value_name = "ID", required = true)]
+        video_id: String,
+    },
+    /// Delete all stored comments.
     Clear,
 }
 
@@ -273,9 +460,32 @@ impl Cli {
                 KeywordsKind::Add { .. } => "keywords add",
                 KeywordsKind::Check => "keywords check",
                 KeywordsKind::Report => "keywords report",
+                KeywordsKind::Inspect { .. } => "keywords inspect",
+                KeywordsKind::Research { .. } => "keywords research",
+                KeywordsKind::Discover { .. } => "keywords discover",
             },
+            Command::Tags { kind } => match kind {
+                TagsKind::Backfill => "tags backfill",
+                TagsKind::Analyze => "tags analyze",
+            },
+            Command::Transcript { kind } => match kind {
+                TranscriptKind::Get { .. } => "transcript get",
+                TranscriptKind::List => "transcript list",
+                TranscriptKind::Clear => "transcript clear",
+            },
+            Command::Metadata { .. } => "metadata",
+            Command::Comments { kind } => match kind {
+                CommentsKind::Get { .. } => "comments get",
+                CommentsKind::List { .. } => "comments list",
+                CommentsKind::Clear => "comments clear",
+            },
+            Command::Gaps { .. } => "gaps",
+            Command::Outliers { .. } => "outliers",
             Command::Scorecard { .. } => "scorecard",
             Command::Health => "health",
+            Command::Analyze { .. } => "analyze",
+            Command::Forecast { .. } => "forecast",
+            Command::Suggest { .. } => "suggest",
             Command::Alerts { action, .. } => match action {
                 Some(AlertsAction::List) => "alerts list",
                 Some(AlertsAction::Clear) => "alerts clear",
@@ -284,7 +494,6 @@ impl Cli {
             Command::Reindex => "reindex",
             Command::Backup { .. } => "backup",
             Command::Quota => "quota",
-            Command::Mcp => "mcp",
             Command::Thumbnail { kind } => match kind {
                 ThumbnailKind::Render { .. } => "thumbnail render",
                 ThumbnailKind::ListTemplates => "thumbnail list-templates",
@@ -292,11 +501,14 @@ impl Cli {
             Command::Check { kind } => match kind {
                 CheckKind::Availability { .. } => "check availability",
             },
+            Command::VideosDedupe => "videos dedupe",
             Command::Export { .. } => "export",
             Command::Filmot { kind } => match kind {
                 FilmotKind::Get { .. } => "filmot get",
             },
+            Command::Prompt { .. } => "prompt",
             Command::Serve { .. } => "serve",
+            Command::Rpc => "rpc",
         }
     }
 }

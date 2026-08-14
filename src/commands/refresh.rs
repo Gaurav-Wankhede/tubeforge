@@ -17,7 +17,10 @@ pub async fn run(
 ) -> Result<Value, TubeforgeError> {
     let clients = FetchClients::new()?;
     let mut db = Db::open(&cfg.db_path).await?;
-    let opts = IngestOptions { use_api: false, no_backup };
+    let opts = IngestOptions {
+        use_api: false,
+        no_backup,
+    };
     let summary = ingest::refresh_channels(cfg, &clients, &mut db, channels, &opts).await?;
     let mut data = summary_json(&summary);
     data["command"] = json!("refresh");
