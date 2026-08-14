@@ -2,3 +2,11 @@
 .env
 backups/
 .DS_Store
+
+# Local tool databases / stray artifacts
+webfind.db
+<longcat_arg_value>*
+
+# Frontend build output (belt-and-suspenders; frontend/.gitignore also covers)
+frontend/node_modules
+frontend/dist
