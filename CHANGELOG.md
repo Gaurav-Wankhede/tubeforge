@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Engine independence (v4.0)** — storage moved to a from-scratch embedded
+  **`tfdb`** engine (`.wal` + `.dat`, fsync-on-commit WAL + atomic checkpoint,
+  pure Rust, no SQLite/SQL, no external database); **own BM25** engine replaces
+  tantivy; **raw-Hyper** web framework replaces Axum; **SSE** replaces htmx
+  polling; **WebSocket JSON-RPC** method surface.
+- **Stdio JSON-RPC agent bridge** — `tubeforge rpc` connects agent harnesses
+  (OpenCode, Claude Code, Codex, Hermes, Pi Agent) over line-delimited JSON-RPC
+  on stdin/stdout (same method surface as the dashboard `/ws`). Replaces the
+  removed `mcp`/`tursodb` external server.
+- **Content layer** — `analyze`, `transcript`, `metadata`, `comments`, `gaps`,
+  `forecast`, `suggest`, `tags`, `videos dedupe`; growth forecasting (weighted
+  OLS on `channel_snapshots`); packaging-psychology title formulas.
+- **Scoring** — extended to **18 SEO** components (10 structural + 5 vidIQ +
+  3 graph via `graph_scores`) + 7 GEO + packaging-psychology supporting layer.
+- **Knowledge Graph** — kg_entities/kg_relations/kg_communities tables, PageRank
+  + Louvain, `graph_scores` on existing endpoints (internal-only; no `/api/kg/*`).
+
 ## [0.1.0] - 2026-08-04
 
 Initial public release — Phases 0–3 of the TubeForge roadmap:
@@ -14,9 +33,9 @@ Initial public release — Phases 0–3 of the TubeForge roadmap:
 ### Added
 
 - **Engine gate** — single-crate Rust CLI (`tubeforge`), tokio async runtime,
-  embedded Turso database (single-file SQLite-compatible `.db`, WAL mode),
-  stable `{ok,data,meta,error}` JSON envelope (LLD §4.2) with `--json` on all
-  commands.
+  embedded `tfdb` engine (from-scratch crash-safe store — `.wal` + `.dat`,
+  pure Rust, no SQLite/SQL), stable `{ok,data,meta,error}` JSON envelope
+  (LLD §4.2) with `--json` on all commands.
 - **Ingest** — `ingest channels` (RSS, ~15 most-recent videos, ETag-cached) and
   `ingest links` (oEmbed, no API key needed); optional YouTube Data API v3
   enrichment with batched `videos.list` (≤50 ids/call, 1 unit/call) and a
@@ -24,10 +43,9 @@ Initial public release — Phases 0–3 of the TubeForge roadmap:
   threshold).
 - **Schema & migrations** — versioned schema (SCHEMA_VERSION 1→3), backup +
   `refresh` ETag-aware updates (304 → no writes, no snapshot).
-- **Scoring** — tantivy BM25 title/description index (`reindex`, idempotent),
-  `score --draft-title` envelope with SEO (10 components) and GEO (7
-  components) composites, weights env-configurable (`TUBEFORGE_WEIGHTS_*`,
-  per-component overrides).
+- **Scoring** — own BM25 title/description/tag index (`reindex`, idempotent),
+  `score --draft-title` envelope with SEO and GEO composites, weights
+  env-configurable (`TUBEFORGE_WEIGHTS_*`, per-component overrides).
 - **Analytics** — `ideas`, `keywords`, `scorecard`, `health`, `alerts`;
   PageRank-influenced idea ranking, keyword ranks, stale-channel rules.
 - **Ingest hardening** — ID checksums, category map, disabled-metric heuristic.
@@ -46,8 +64,8 @@ Initial public release — Phases 0–3 of the TubeForge roadmap:
 - **Agent hardening** — stdout/stderr separation, `list_alerts(0)` LIMIT fix,
   nested `check availability`, `all_ideas()`, `tests/agent_contract.rs`
   binary-level `--json` contract tests.
-- **MCP** — `tubeforge mcp` prints a `.mcp.json`-compatible snippet pointing
-  at `tursodb <db> --mcp` (external MCP server, ADR-8).
+- **Agents** — `tubeforge rpc` stdio JSON-RPC bridge (line-delimited requests
+  on stdin, responses on stdout; same method surface as the dashboard `/ws`).
 
 ### Changed
 
