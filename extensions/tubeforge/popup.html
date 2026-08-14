@@ -1,0 +1,119 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    body {
+      width: 300px;
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 13px;
+      color: #e6e8ee;
+      background: #171a21;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      border-bottom: 1px solid #2a2f3a;
+      background: #1d212b;
+      font-weight: 700;
+    }
+    .header span { color: #4f8cff; }
+    .status {
+      margin-left: auto;
+      font-size: 10px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      border: 1px solid #2a2f3a;
+      color: #9aa3b2;
+    }
+    .status.online { color: #3fbf6f; border-color: #3fbf6f; }
+    .status.offline { color: #e05a5a; border-color: #e05a5a; }
+    .body { padding: 12px; }
+    .field { margin-bottom: 10px; }
+    label {
+      display: block;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #9aa3b2;
+      margin-bottom: 4px;
+    }
+    input {
+      width: 100%;
+      box-sizing: border-box;
+      background: #1d212b;
+      color: #e6e8ee;
+      border: 1px solid #2a2f3a;
+      border-radius: 8px;
+      padding: 7px 10px;
+      font-size: 12px;
+      outline: none;
+    }
+    input:focus { border-color: #4f8cff; }
+    button {
+      width: 100%;
+      background: #4f8cff;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 6px;
+    }
+    button:hover { opacity: 0.9; }
+    button.secondary {
+      background: #2a2f3a;
+      color: #e6e8ee;
+      margin-top: 4px;
+    }
+    .result { margin-top: 10px; }
+    .result .row {
+      display: flex;
+      justify-content: space-between;
+      padding: 3px 0;
+      font-size: 12px;
+      color: #9aa3b2;
+    }
+    .result .row b { color: #e6e8ee; }
+    .error { color: #e05a5a; font-size: 12px; margin-top: 8px; }
+    .verdict {
+      margin-top: 8px;
+      background: #1d212b;
+      border-left: 3px solid #4f8cff;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 12px;
+      color: #9aa3b2;
+    }
+    .link {
+      display: block;
+      text-align: center;
+      margin-top: 10px;
+      color: #4f8cff;
+      text-decoration: none;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    Tube<span>Forge</span>
+    <div class="status" id="status">…</div>
+  </div>
+  <div class="body">
+    <div class="field">
+      <label>Keyword research</label>
+      <input id="kw" placeholder="rust async tokio" />
+      <button id="go">Research</button>
+    </div>
+    <div id="result"></div>
+    <a class="link" id="dash" href="http://127.0.0.1:17487/" target="_blank">Open TubeForge dashboard →</a>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

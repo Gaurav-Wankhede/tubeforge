@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "TubeForge — YouTube SEO Overlay",
+  "version": "0.1.0",
+  "description": "VidIQ-style overlay for YouTube, powered by your local TubeForge server (keyless). SEO scores, tags, keyword research and channel audits on every page you visit.",
+  "permissions": ["storage", "activeTab"],
+  "host_permissions": ["http://127.0.0.1:17487/*", "http://localhost:17487/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://m.youtube.com/*"
+      ],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "TubeForge"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
