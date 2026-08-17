@@ -5,8 +5,8 @@ use std::time::Instant;
 
 use clap::Parser;
 use tubeforge::cli::{
-    CheckKind, Cli, Command, CommentsKind, ExportFormat as CliExportFormat, FilmotKind, IngestKind,
-    KeywordsKind, TagsKind, ThumbnailKind, TranscriptKind,
+    CheckKind, Cli, Command, CommentsKind, ExportFormat as CliExportFormat, FilmotKind, GreedyKind,
+    IngestKind, KeywordsKind, SeedsAction, TagsKind, ThumbnailKind, TranscriptKind,
 };
 use tubeforge::commands;
 use tubeforge::config;
@@ -290,6 +290,27 @@ async fn dispatch(cli: &Cli) -> Result<(serde_json::Value, Option<QuotaInfo>), T
             )
             .await?
         }
+        Command::Greedy { kind } => match kind {
+            GreedyKind::Run { max } => commands::greedy::run_research(&cfg, *max).await?,
+            GreedyKind::Status => commands::greedy::run_status(&cfg).await?,
+            GreedyKind::Seeds { action } => {
+                let db = Db::open(&cfg.db_path).await?;
+                match action {
+                    SeedsAction::Add { seeds } => {
+                        commands::greedy::run_seeds_add(&db, seeds).await?
+                    }
+                    SeedsAction::List => commands::greedy::run_seeds_list(&db).await?,
+                    SeedsAction::Deactivate { seed_id } => {
+                        commands::greedy::run_seeds_deactivate(&db, *seed_id).await?
+                    }
+                    SeedsAction::Init => commands::greedy::run_seeds_init(&db).await?,
+                }
+            }
+            GreedyKind::Daemon { interval, max } => {
+                commands::greedy::run_daemon(&cfg, *interval, *max).await?
+            }
+            GreedyKind::Stop => commands::greedy::run_stop(&cfg).await?,
+        },
         // Serve never reaches the envelope pipeline (special-cased in run()).
         Command::Serve { .. } => unreachable!("serve is handled before dispatch"),
         // Rpc is long-running stdio; also special-cased in run().

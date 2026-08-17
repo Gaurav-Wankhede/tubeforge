@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Greedy Bot** — autonomous topic research engine that discovers and researches YouTube topics using the channel's own data. Five data sources (competitor tags, channel tags, tracked keywords, suggested tags, related keywords) feed an auto-seed pipeline (`greedy seeds init`). Topic candidates are generated from autocomplete suggestions, competitor tags, related keywords, and seed drift — deduplicated against research history with a 24h cooldown. Results are persisted to `greedy_research_history` / `greedy_topic_log` / `greedy_seeds` tables (schema v10, 25 tables total). Commands: `greedy run`, `greedy status`, `greedy seeds add|list|deactivate|init`, `greedy daemon`, `greedy stop`. Daemon mode runs on a configurable interval with PID file management and graceful SIGINT/SIGTERM shutdown.
 - **Engine independence (v4.0)** — storage moved to a from-scratch embedded
   **`tfdb`** engine (`.wal` + `.dat`, fsync-on-commit WAL + atomic checkpoint,
   pure Rust, no SQLite/SQL, no external database); **own BM25** engine replaces

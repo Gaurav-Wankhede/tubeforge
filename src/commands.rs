@@ -16,6 +16,7 @@ pub mod export;
 pub mod filmot;
 pub mod forecast;
 pub mod gaps;
+pub mod greedy;
 pub mod health;
 pub mod ideas;
 pub mod ingest;

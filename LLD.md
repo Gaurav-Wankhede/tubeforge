@@ -81,6 +81,8 @@ tubeforge/
 │   │   ├── forecast.rs         # weighted OLS growth forecasting from channel_snapshots
 │   │   ├── kg_builder.rs       # KG build (Full/Incremental) + load_or_build cache
 │   │   ├── kg_algorithms.rs    # PageRank + Louvain over the graph
+│   │   ├── topic_generator.rs  # greedy bot: candidate topics from autocomplete/competitor tags/drift
+│   │   ├── history_tracker.rs  # greedy bot: cooldown, dedup, research history logging
 │   │   └── reports.rs          # scorecard, health, alerts
 │   ├── thumbnail/
 │   │   ├── mod.rs              # template fill, render orchestration (chromiumoxide)
@@ -114,6 +116,7 @@ tubeforge/
 │       ├── scorecard.rs health.rs analyze.rs forecast.rs suggest.rs alerts.rs
 │       ├── backup.rs quota.rs reindex.rs rpc.rs thumbnail.rs availability.rs
 │       ├── videos.rs export.rs filmot.rs prompt.rs serve.rs
+│       └── greedy.rs           # greedy bot: run, status, seeds, daemon, stop
 └── tests/
     ├── fixtures/               # local HTTP server (wiremock) RSS/oEmbed/API payloads
     └── *.rs                    # integration + property tests (incl. serve.rs — dashboard HTTP suite)
@@ -125,9 +128,9 @@ tubeforge/
 
 ## 3. Data Model
 
-### 3.1 `tfdb` schema (from-scratch engine, SCHEMA_VERSION = 9)
+### 3.1 `tfdb` schema (from-scratch engine, SCHEMA_VERSION = 10)
 
-Storage is a **typed-row key/value model** (`src/tfdb/schema.rs`): each table has a fixed `TableSchema` with `Col { name, ColType }`; rows are `BTreeMap<String, Value>`; composite keys are folded into a single primary-key string (e.g. `keyword\x1fchecked_at`, `from\x1fto`); auto-increment ids are assigned in Rust. **No SQL DDL.** The conceptual tables (22 — see PRD §15) include:
+Storage is a **typed-row key/value model** (`src/tfdb/schema.rs`): each table has a fixed `TableSchema` with `Col { name, ColType }`; rows are `BTreeMap<String, Value>`; composite keys are folded into a single primary-key string (e.g. `keyword\x1fchecked_at`, `from\x1fto`); auto-increment ids are assigned in Rust. **No SQL DDL.** The conceptual tables (25 — see PRD §15) include:
 
 ```text
 channels          (channel_id PK, handle UNIQUE, title, description, avatar_url, country,
@@ -158,6 +161,10 @@ kg_entities       (entity_id, entity_type, canonical_name, display_name, propert
 kg_relations      (from, to, relation_type, weight, source)     -- weighted graph edges
 kg_communities    (community_id, community_type, summary, member_count, mean_views,
                    mean_seo_score, top_entities)
+greedy_seeds      (seed_id autoincrement, seed, source, added_at, active)
+greedy_research_history (research_id autoincrement, topic, researched_at, video_ids_json,
+                         video_count, mean_views, source, duration_ms)
+greedy_topic_log  (log_id autoincrement, topic, status, reason, attempted_at)
 meta              (key PK, value)  -- schema_version, quota_*, last_backup_at, last_reindex_at,
                                     -- settings_json, kg_cache_json
 ```
@@ -178,7 +185,7 @@ meta              (key PK, value)  -- schema_version, quota_*, last_backup_at, l
 
 - **No external index engine** — tantivy and engine FTS were removed (ADR-2); BM25 is TubeForge-owned (`src/search`).
 - **Embeddings column: reserved, unused in v1.** Lexical-only (ADR-9); HNSW module ships but no embeddings are generated. Semantic embeddings can be added later **without a schema change** (the `embedding` BLOB columns already exist on `videos` and `kg_entities`).
-- **`meta.schema_version`** drives migrations (section 9). **SCHEMA_VERSION = 9**.
+- **`meta.schema_version`** drives migrations (section 9). **SCHEMA_VERSION = 10**.
 - **Ingest idempotency:** `video_id` PK → upsert semantics (see 6.2).
 
 ---

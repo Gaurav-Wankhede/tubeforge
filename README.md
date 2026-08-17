@@ -68,9 +68,35 @@ ready for agent/script consumption.
 | `tubeforge export --format zip\|dir` | Deterministic export: CSVs + JSON arrays + manifest |
 | `tubeforge filmot get <id>` | Opt-in Filmot recovery lookup (needs `TUBEFORGE_FILMOT_KEY`) |
 | `tubeforge thumbnail render\|list-templates` | 1280×720 PNG thumbnails via headless Chromium |
+| `tubeforge greedy run\|status\|seeds\|daemon\|stop` | Automated topic research on autopilot (see below) |
 | `tubeforge serve [--port] [--host]` | Local dashboard (raw-Hyper + WebSocket JSON-RPC + SSE, see below) |
 | `tubeforge rpc` | **Stdio JSON-RPC bridge for agent harnesses** (OpenCode, Claude Code, Codex, Hermes, Pi Agent — see below) |
 | `tubeforge prompt` | Assemble an AI gap-mining prompt bundle from stored transcripts |
+
+## Greedy Bot (automated topic research)
+
+The greedy bot autonomously discovers and researches YouTube topics using the channel's own data — no hardcoded seeds. It runs as a one-shot command or a long-running daemon.
+
+```sh
+# Seed topics from your channel's data (competitor tags, video tags, keywords)
+tubeforge greedy seeds init
+
+# Research 5 topics (one-shot)
+tubeforge greedy run --max 5
+
+# Check research history
+tubeforge greedy status
+
+# Run as a daemon (every hour, 5 topics per tick)
+tubeforge greedy daemon --interval 3600 --max 5
+
+# Stop the daemon
+tubeforge greedy stop
+```
+
+**How it works:** `seeds init` auto-discovers topics from 5 data sources (competitor tags, channel tags, tracked keywords, suggested tags, related keywords). `run` generates candidates from autocomplete + competitor tags + related keywords + seed drift, checks the 24h cooldown, and researches eligible ones via the existing `keywords research` pipeline (yt-dlp SERP + tags + autocomplete). Results are deduplicated and persisted to `greedy_research_history`.
+
+**Daemon:** PID file at `~/.tubeforge/greedy.pid`. Handles SIGINT (Ctrl+C) and SIGTERM for graceful shutdown. Refuses to start if already running.
 
 ## Dashboard
 
