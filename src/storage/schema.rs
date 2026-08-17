@@ -6,7 +6,7 @@
 //! `Db::user_version` / health for API parity with the legacy turso layer.
 
 /// Current schema version (mirrors the recorded `meta.schema_version`).
-pub const SCHEMA_VERSION: i64 = 9;
+pub const SCHEMA_VERSION: i64 = 10;
 
 /// meta keys used by the ledger (LLD §3.1 comment block).
 pub const META_KEYS: [&str; 6] = [

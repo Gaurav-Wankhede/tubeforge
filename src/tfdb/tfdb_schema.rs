@@ -167,6 +167,25 @@ pub fn all() -> Vec<TableSchema> {
             .json("top_entities")
             .text("created_at")
             .text("updated_at"),
+        // -- greedy bot tables --
+        TableSchema::new("greedy_seeds", "seed_id")
+            .text("seed")
+            .text("source")
+            .text("added_at")
+            .boolean("active"),
+        TableSchema::new("greedy_research_history", "research_id")
+            .text("topic")
+            .text("researched_at")
+            .text("video_ids_json")
+            .int("video_count")
+            .float("mean_views")
+            .text("source")
+            .text("duration_ms"),
+        TableSchema::new("greedy_topic_log", "log_id")
+            .text("topic")
+            .text("status")
+            .text("reason")
+            .text("attempted_at"),
     ]
 }
 
@@ -184,7 +203,12 @@ mod tests {
             // Every column name is unique within the table.
             let mut cols = std::collections::HashSet::new();
             for c in &s.cols {
-                assert!(cols.insert(c.name.clone()), "dup col {} in {}", c.name, s.name);
+                assert!(
+                    cols.insert(c.name.clone()),
+                    "dup col {} in {}",
+                    c.name,
+                    s.name
+                );
             }
         }
     }
@@ -194,13 +218,34 @@ mod tests {
         let schemas = all();
         let names: Vec<String> = schemas.iter().map(|s| s.name.clone()).collect();
         for required in [
-            "videos", "channels", "scores", "keywords", "keyword_rankings", "ideas", "alerts",
-            "edges", "meta", "kg_entities", "kg_relations", "kg_communities", "tags",
-            "video_tags", "competitor_tags", "transcripts", "comments", "video_heatmap",
-            "channel_snapshots", "keyword_research", "competitors", "ingest_log",
+            "videos",
+            "channels",
+            "scores",
+            "keywords",
+            "keyword_rankings",
+            "ideas",
+            "alerts",
+            "edges",
+            "meta",
+            "kg_entities",
+            "kg_relations",
+            "kg_communities",
+            "tags",
+            "video_tags",
+            "competitor_tags",
+            "transcripts",
+            "comments",
+            "video_heatmap",
+            "channel_snapshots",
+            "keyword_research",
+            "competitors",
+            "ingest_log",
         ] {
-            assert!(names.iter().any(|n| n == required), "missing table {required}");
+            assert!(
+                names.iter().any(|n| n == required),
+                "missing table {required}"
+            );
         }
-        assert_eq!(schemas.len(), 22);
+        assert_eq!(schemas.len(), 25);
     }
 }

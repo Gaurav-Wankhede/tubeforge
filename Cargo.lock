@@ -2257,6 +2257,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "libc",
  "mime_guess",
  "proptest",
  "quick-xml",

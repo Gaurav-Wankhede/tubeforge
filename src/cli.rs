@@ -235,6 +235,11 @@ pub enum Command {
         #[arg(long, action = ArgAction::SetTrue)]
         json: bool,
     },
+    /// Automated greedy topic research on autopilot.
+    Greedy {
+        #[command(subcommand)]
+        kind: GreedyKind,
+    },
     /// Serve the local HTMX dashboard (PRD §5.4 deferred item).
     ///
     /// Long-running server: binds loopback only, never emits the JSON
@@ -264,6 +269,56 @@ pub enum CheckKind {
         /// Restrict the check to these video ids (default: all stored).
         video_id: Vec<String>,
     },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum GreedyKind {
+    /// Generate candidates and research as many as possible.
+    Run {
+        /// Max topics to research this run (default 5).
+        #[arg(long, value_name = "N", default_value_t = 5)]
+        max: usize,
+    },
+    /// Stats on the research history.
+    Status,
+    /// Manage seed topics.
+    Seeds {
+        #[command(subcommand)]
+        action: SeedsAction,
+    },
+    /// Run the greedy bot as a long-running daemon. Researches topics on a
+    /// fixed interval, writes a PID file for clean shutdown.
+    Daemon {
+        /// Seconds between research runs (default 3600 = 1 hour).
+        #[arg(long, value_name = "SECS", default_value_t = 3600)]
+        interval: u64,
+        /// Max topics per run (default 5).
+        #[arg(long, value_name = "N", default_value_t = 5)]
+        max: usize,
+    },
+    /// Stop a running greedy daemon (sends SIGTERM via PID file).
+    Stop,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SeedsAction {
+    /// Add seed topics.
+    Add {
+        /// Seed keywords (repeatable).
+        #[arg(value_name = "SEED")]
+        seeds: Vec<String>,
+    },
+    /// List all seeds.
+    List,
+    /// Deactivate a seed by its numeric id.
+    Deactivate {
+        /// Seed id to deactivate.
+        #[arg(value_name = "ID")]
+        seed_id: i64,
+    },
+    /// Seed the table with default topics for the owner channel niche
+    /// (Rust, WebAssembly, Linux, tooling). Skips seeds that already exist.
+    Init,
 }
 
 /// `--format` for `export` (parsed case-insensitively by clap).
@@ -507,6 +562,18 @@ impl Cli {
                 FilmotKind::Get { .. } => "filmot get",
             },
             Command::Prompt { .. } => "prompt",
+            Command::Greedy { kind } => match kind {
+                GreedyKind::Run { .. } => "greedy run",
+                GreedyKind::Status => "greedy status",
+                GreedyKind::Seeds { action } => match action {
+                    SeedsAction::Add { .. } => "greedy seeds add",
+                    SeedsAction::List => "greedy seeds list",
+                    SeedsAction::Deactivate { .. } => "greedy seeds deactivate",
+                    SeedsAction::Init => "greedy seeds init",
+                },
+                GreedyKind::Daemon { .. } => "greedy daemon",
+                GreedyKind::Stop => "greedy stop",
+            },
             Command::Serve { .. } => "serve",
             Command::Rpc => "rpc",
         }

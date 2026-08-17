@@ -246,6 +246,51 @@ pub struct KgRelationRow {
 }
 
 // ---------------------------------------------------------------------------
+// Greedy bot row types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct GreedyHistoryRow {
+    pub research_id: i64,
+    pub topic: String,
+    pub researched_at: String,
+    pub video_ids_json: String,
+    pub video_count: i64,
+    pub mean_views: f64,
+    pub source: String,
+    pub duration_ms: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct GreedyTopicLogRow {
+    pub log_id: i64,
+    pub topic: String,
+    pub status: String,
+    pub reason: String,
+    pub attempted_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct GreedySeedRow {
+    pub seed_id: i64,
+    pub seed: String,
+    pub source: String,
+    pub added_at: String,
+    pub active: bool,
+}
+
+/// Parameters for inserting a greedy research history row.
+pub struct GreedyHistoryInsert<'a> {
+    pub topic: &'a str,
+    pub researched_at: &'a str,
+    pub video_ids_json: &'a str,
+    pub video_count: i64,
+    pub mean_views: f64,
+    pub source: &'a str,
+    pub duration_ms: i64,
+}
+
+// ---------------------------------------------------------------------------
 // Value mapping helpers (tfdb Row <-> legacy row structs).
 // ---------------------------------------------------------------------------
 
@@ -362,8 +407,14 @@ fn channel_to_row(c: &ChannelRow) -> Row {
     row.insert("channel_id".to_string(), v_text(&c.channel_id));
     row.insert("handle".to_string(), v_opt_text(c.handle.as_deref()));
     row.insert("title".to_string(), v_text(&c.title));
-    row.insert("description".to_string(), v_opt_text(c.description.as_deref()));
-    row.insert("avatar_url".to_string(), v_opt_text(c.avatar_url.as_deref()));
+    row.insert(
+        "description".to_string(),
+        v_opt_text(c.description.as_deref()),
+    );
+    row.insert(
+        "avatar_url".to_string(),
+        v_opt_text(c.avatar_url.as_deref()),
+    );
     row.insert("country".to_string(), v_opt_text(c.country.as_deref()));
     row.insert("subscriber_count".to_string(), v_int(c.subscriber_count));
     row.insert("video_count".to_string(), v_int(c.video_count));
@@ -394,11 +445,17 @@ fn channel_from_row(r: &Row) -> ChannelRow {
 fn video_to_row(v: &VideoRow) -> Row {
     let mut row = Row::new();
     row.insert("video_id".to_string(), v_text(&v.video_id));
-    row.insert("channel_id".to_string(), v_opt_text(v.channel_id.as_deref()));
+    row.insert(
+        "channel_id".to_string(),
+        v_opt_text(v.channel_id.as_deref()),
+    );
     row.insert("title".to_string(), v_text(&v.title));
     row.insert("description".to_string(), v_text(&v.description));
     row.insert("tags".to_string(), v_json(&v.tags));
-    row.insert("category_id".to_string(), v_opt_text(v.category_id.as_deref()));
+    row.insert(
+        "category_id".to_string(),
+        v_opt_text(v.category_id.as_deref()),
+    );
     row.insert("duration_sec".to_string(), v_int(v.duration_sec));
     row.insert("published_at".to_string(), v_text(&v.published_at));
     row.insert("view_count".to_string(), v_int(v.view_count));
@@ -408,7 +465,10 @@ fn video_to_row(v: &VideoRow) -> Row {
     row.insert("source".to_string(), v_text(&v.source));
     row.insert("fetched_at".to_string(), v_text(&v.fetched_at));
     row.insert("updated_at".to_string(), v_text(&v.updated_at));
-    row.insert("recording_date".to_string(), v_opt_text(v.recording_date.as_deref()));
+    row.insert(
+        "recording_date".to_string(),
+        v_opt_text(v.recording_date.as_deref()),
+    );
     row.insert(
         "recording_location_name".to_string(),
         v_opt_text(v.recording_location_name.as_deref()),
@@ -416,7 +476,10 @@ fn video_to_row(v: &VideoRow) -> Row {
     row.insert("recording_lat".to_string(), v_float(v.recording_lat));
     row.insert("recording_lng".to_string(), v_float(v.recording_lng));
     row.insert("topic_categories".to_string(), v_json(&v.topic_categories));
-    row.insert("privacy_status".to_string(), v_opt_text(v.privacy_status.as_deref()));
+    row.insert(
+        "privacy_status".to_string(),
+        v_opt_text(v.privacy_status.as_deref()),
+    );
     row
 }
 
@@ -573,14 +636,16 @@ impl Db {
             engine: Arc::new(Mutex::new(engine)),
             path: path.to_path_buf(),
         };
-        db.meta_set("schema_version", &SCHEMA_VERSION.to_string()).await?;
+        db.meta_set("schema_version", &SCHEMA_VERSION.to_string())
+            .await?;
         Ok(db)
     }
 
     /// Recorded schema version (meta "schema_version"), default 0.
     pub async fn user_version(&self) -> Result<i64, TubeforgeError> {
         let v = self
-            .meta_get("schema_version").await?
+            .meta_get("schema_version")
+            .await?
             .and_then(|s| s.parse::<i64>().ok())
             .unwrap_or(0);
         Ok(v)
@@ -708,9 +773,16 @@ impl Db {
     pub async fn list_rankings(&self) -> Result<Vec<RankingRow>, TubeforgeError> {
         let mut eng = self.engine.lock().unwrap();
         eng.reload()?;
-        let mut rows: Vec<RankingRow> =
-            eng.all("keyword_rankings")?.iter().map(ranking_from_row).collect();
-        rows.sort_by(|a, b| a.keyword.cmp(&b.keyword).then(a.checked_at.cmp(&b.checked_at)));
+        let mut rows: Vec<RankingRow> = eng
+            .all("keyword_rankings")?
+            .iter()
+            .map(ranking_from_row)
+            .collect();
+        rows.sort_by(|a, b| {
+            a.keyword
+                .cmp(&b.keyword)
+                .then(a.checked_at.cmp(&b.checked_at))
+        });
         Ok(rows)
     }
 
@@ -718,7 +790,11 @@ impl Db {
         let mut eng = self.engine.lock().unwrap();
         eng.reload()?;
         Ok(eng
-            .find_eq("keyword_rankings", "checked_at", &Value::Text(checked_at.to_string()))?
+            .find_eq(
+                "keyword_rankings",
+                "checked_at",
+                &Value::Text(checked_at.to_string()),
+            )?
             .len() as u64)
     }
 
@@ -726,11 +802,19 @@ impl Db {
         let mut eng = self.engine.lock().unwrap();
         eng.reload()?;
         let mut rows: Vec<EdgeRow> = eng.all("edges")?.iter().map(edge_from_row).collect();
-        rows.sort_by(|a, b| a.from_channel.cmp(&b.from_channel).then(a.to_channel.cmp(&b.to_channel)));
+        rows.sort_by(|a, b| {
+            a.from_channel
+                .cmp(&b.from_channel)
+                .then(a.to_channel.cmp(&b.to_channel))
+        });
         Ok(rows)
     }
 
-    pub async fn list_ideas(&self, status: Option<&str>, limit: usize) -> Result<Vec<IdeaRow>, TubeforgeError> {
+    pub async fn list_ideas(
+        &self,
+        status: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<IdeaRow>, TubeforgeError> {
         let mut eng = self.engine.lock().unwrap();
         eng.reload()?;
         let mut items: Vec<(f64, i64, IdeaRow)> = eng
@@ -804,11 +888,17 @@ impl Db {
             .map(|r| (t(&r, "at"), i(&r, "log_id")))
             .collect();
         items.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
-        let at = items.first().map(|(at, id)| (at.clone(), *id)).unwrap_or_default();
+        let at = items
+            .first()
+            .map(|(at, id)| (at.clone(), *id))
+            .unwrap_or_default();
         if items.is_empty() {
             return Ok(None);
         }
-        let row = eng.all("ingest_log")?.into_iter().find(|r| i(r, "log_id") == at.1);
+        let row = eng
+            .all("ingest_log")?
+            .into_iter()
+            .find(|r| i(r, "log_id") == at.1);
         Ok(row.map(|r| ingest_log_from_row(&r)))
     }
 
@@ -869,7 +959,10 @@ impl Db {
         Ok(out)
     }
 
-    pub async fn tag_gaps(&self, own_channel_id: &str) -> Result<Vec<(String, i64, i64)>, TubeforgeError> {
+    pub async fn tag_gaps(
+        &self,
+        own_channel_id: &str,
+    ) -> Result<Vec<(String, i64, i64)>, TubeforgeError> {
         let mut eng = self.engine.lock().unwrap();
         eng.reload()?;
         let mut comp: HashMap<String, i64> = HashMap::new();
@@ -919,7 +1012,10 @@ impl Db {
         Ok(out)
     }
 
-    pub async fn get_video_tags(&self, video_id: &str) -> Result<Vec<(String, i64, String)>, TubeforgeError> {
+    pub async fn get_video_tags(
+        &self,
+        video_id: &str,
+    ) -> Result<Vec<(String, i64, String)>, TubeforgeError> {
         let mut eng = self.engine.lock().unwrap();
         eng.reload()?;
         let mut out: Vec<(String, i64, String)> = Vec::new();
@@ -942,26 +1038,44 @@ impl Db {
         let mut eng = self.engine.lock().unwrap();
         eng.reload()?;
         let mut rows: Vec<(String, i64, i64)> = eng
-            .find_eq("competitor_tags", "channel_id", &Value::Text(channel_id.to_string()))?
+            .find_eq(
+                "competitor_tags",
+                "channel_id",
+                &Value::Text(channel_id.to_string()),
+            )?
             .into_iter()
-            .map(|r| (t(&r, "tag_name"), i(&r, "video_count"), f(&r, "avg_views") as i64))
+            .map(|r| {
+                (
+                    t(&r, "tag_name"),
+                    i(&r, "video_count"),
+                    f(&r, "avg_views") as i64,
+                )
+            })
             .collect();
         rows.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)));
         rows.truncate(50);
         Ok(rows)
     }
 
-    pub async fn get_transcript(&self, video_id: &str) -> Result<Option<TranscriptRow>, TubeforgeError> {
+    pub async fn get_transcript(
+        &self,
+        video_id: &str,
+    ) -> Result<Option<TranscriptRow>, TubeforgeError> {
         let mut eng = self.engine.lock().unwrap();
         eng.reload()?;
-        Ok(eng.get("transcripts", video_id)?.map(|r| transcript_from_row(&r)))
+        Ok(eng
+            .get("transcripts", video_id)?
+            .map(|r| transcript_from_row(&r)))
     }
 
     pub async fn list_transcripts(&self) -> Result<Vec<TranscriptRow>, TubeforgeError> {
         let mut eng = self.engine.lock().unwrap();
         eng.reload()?;
-        let mut rows: Vec<TranscriptRow> =
-            eng.all("transcripts")?.iter().map(transcript_from_row).collect();
+        let mut rows: Vec<TranscriptRow> = eng
+            .all("transcripts")?
+            .iter()
+            .map(transcript_from_row)
+            .collect();
         rows.sort_by(|a, b| b.fetched_at.cmp(&a.fetched_at));
         Ok(rows)
     }
@@ -995,7 +1109,11 @@ impl Db {
         let mut eng = self.engine.lock().unwrap();
         eng.reload()?;
         let mut rows: Vec<(String, Option<i64>, Option<i64>, Option<i64>)> = eng
-            .find_eq("channel_snapshots", "channel_id", &Value::Text(channel_id.to_string()))?
+            .find_eq(
+                "channel_snapshots",
+                "channel_id",
+                &Value::Text(channel_id.to_string()),
+            )?
             .into_iter()
             .map(|r| {
                 (
@@ -1028,11 +1146,18 @@ impl Db {
             .len() as i64)
     }
 
-    pub async fn keyword_research_history(&self, keyword: &str) -> Result<Vec<KeywordResearchRow>, TubeforgeError> {
+    pub async fn keyword_research_history(
+        &self,
+        keyword: &str,
+    ) -> Result<Vec<KeywordResearchRow>, TubeforgeError> {
         let mut eng = self.engine.lock().unwrap();
         eng.reload()?;
         let mut rows: Vec<KeywordResearchRow> = eng
-            .find_eq("keyword_research", "keyword", &Value::Text(keyword.to_string()))?
+            .find_eq(
+                "keyword_research",
+                "keyword",
+                &Value::Text(keyword.to_string()),
+            )?
             .iter()
             .map(keyword_research_from_row)
             .collect();
@@ -1043,13 +1168,19 @@ impl Db {
     pub async fn keyword_research_all(&self) -> Result<Vec<KeywordResearchRow>, TubeforgeError> {
         let mut eng = self.engine.lock().unwrap();
         eng.reload()?;
-        let mut rows: Vec<KeywordResearchRow> =
-            eng.all("keyword_research")?.iter().map(keyword_research_from_row).collect();
+        let mut rows: Vec<KeywordResearchRow> = eng
+            .all("keyword_research")?
+            .iter()
+            .map(keyword_research_from_row)
+            .collect();
         rows.sort_by(|a, b| a.keyword.cmp(&b.keyword).then(a.at.cmp(&b.at)));
         Ok(rows)
     }
 
-    pub async fn keyword_trending(&self, limit: usize) -> Result<Vec<KeywordTrendingRow>, TubeforgeError> {
+    pub async fn keyword_trending(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<KeywordTrendingRow>, TubeforgeError> {
         let mut eng = self.engine.lock().unwrap();
         eng.reload()?;
         let mut latest: HashMap<String, String> = HashMap::new();
@@ -1127,14 +1258,21 @@ impl Db {
         row.insert("geo_score".to_string(), Value::Float(geo));
         row.insert("total_score".to_string(), Value::Float(total));
         row.insert("components".to_string(), v_json(components));
-        row.insert("computed_at".to_string(), v_text(crate::util::now_rfc3339()));
+        row.insert(
+            "computed_at".to_string(),
+            v_text(crate::util::now_rfc3339()),
+        );
         let mut tx = eng.begin();
         tx.put("scores", row)?;
         tx.commit()?;
         Ok(())
     }
 
-    pub async fn add_keywords(&self, keywords: &[String], niche: Option<&str>) -> Result<usize, TubeforgeError> {
+    pub async fn add_keywords(
+        &self,
+        keywords: &[String],
+        niche: Option<&str>,
+    ) -> Result<usize, TubeforgeError> {
         let at = crate::util::now_rfc3339();
         let mut eng = self.engine.lock().unwrap();
         let mut to_add: Vec<Row> = Vec::new();
@@ -1220,7 +1358,11 @@ impl Db {
             .all("edges")?
             .into_iter()
             .filter(|r| t(r, "source") == "overlap")
-            .filter_map(|r| r.get("from_to").and_then(|v| v.as_text()).map(str::to_string))
+            .filter_map(|r| {
+                r.get("from_to")
+                    .and_then(|v| v.as_text())
+                    .map(str::to_string)
+            })
             .collect();
         let mut tx = eng.begin();
         for pk in &pks {
@@ -1284,7 +1426,11 @@ impl Db {
         Ok(())
     }
 
-    pub async fn set_idea_statuses(&self, ids: &[i64], status: &str) -> Result<usize, TubeforgeError> {
+    pub async fn set_idea_statuses(
+        &self,
+        ids: &[i64],
+        status: &str,
+    ) -> Result<usize, TubeforgeError> {
         let mut eng = self.engine.lock().unwrap();
         let mut to_write: Vec<Row> = Vec::new();
         let mut marked = 0;
@@ -1309,7 +1455,10 @@ impl Db {
         let mut to_write: Vec<Row> = Vec::new();
         let mut marked = 0;
         for r in eng.all("alerts")? {
-            if r.get("read_at").map(|v| !matches!(v, Value::Text(_))).unwrap_or(true) {
+            if r.get("read_at")
+                .map(|v| !matches!(v, Value::Text(_)))
+                .unwrap_or(true)
+            {
                 let mut nr = r;
                 nr.insert("read_at".to_string(), v_text(&now));
                 to_write.push(nr);
@@ -1329,7 +1478,11 @@ impl Db {
         let pks: Vec<String> = eng
             .all("alerts")?
             .into_iter()
-            .filter_map(|r| r.get("alert_id").and_then(|v| v.as_i64()).map(|n| n.to_string()))
+            .filter_map(|r| {
+                r.get("alert_id")
+                    .and_then(|v| v.as_i64())
+                    .map(|n| n.to_string())
+            })
             .collect();
         let mut tx = eng.begin();
         for pk in &pks {
@@ -1339,7 +1492,11 @@ impl Db {
         Ok(pks.len())
     }
 
-    pub async fn register_competitors(&self, channel_ids: &[String], label: &str) -> Result<usize, TubeforgeError> {
+    pub async fn register_competitors(
+        &self,
+        channel_ids: &[String],
+        label: &str,
+    ) -> Result<usize, TubeforgeError> {
         let now = crate::util::now_rfc3339();
         let mut eng = self.engine.lock().unwrap();
         let mut to_add: Vec<Row> = Vec::new();
@@ -1367,7 +1524,12 @@ impl Db {
         Ok(added)
     }
 
-    pub async fn upsert_tags(&self, video_id: &str, tag_names: &[String], source: &str) -> Result<(), TubeforgeError> {
+    pub async fn upsert_tags(
+        &self,
+        video_id: &str,
+        tag_names: &[String],
+        source: &str,
+    ) -> Result<(), TubeforgeError> {
         let mut eng = self.engine.lock().unwrap();
         let mut writes: Vec<Row> = Vec::new();
         for (pos, name) in tag_names.iter().enumerate() {
@@ -1446,7 +1608,11 @@ impl Db {
         let pks: Vec<String> = eng
             .all("transcripts")?
             .into_iter()
-            .filter_map(|r| r.get("video_id").and_then(|v| v.as_text()).map(str::to_string))
+            .filter_map(|r| {
+                r.get("video_id")
+                    .and_then(|v| v.as_text())
+                    .map(str::to_string)
+            })
             .collect();
         let mut tx = eng.begin();
         for pk in &pks {
@@ -1486,7 +1652,11 @@ impl Db {
         let pks: Vec<String> = eng
             .all("comments")?
             .into_iter()
-            .filter_map(|r| r.get("comment_id").and_then(|v| v.as_text()).map(str::to_string))
+            .filter_map(|r| {
+                r.get("comment_id")
+                    .and_then(|v| v.as_text())
+                    .map(str::to_string)
+            })
             .collect();
         let mut tx = eng.begin();
         for pk in &pks {
@@ -1496,7 +1666,12 @@ impl Db {
         Ok(())
     }
 
-    pub async fn upsert_heatmap(&self, video_id: &str, points_json: &str, now: &str) -> Result<(), TubeforgeError> {
+    pub async fn upsert_heatmap(
+        &self,
+        video_id: &str,
+        points_json: &str,
+        now: &str,
+    ) -> Result<(), TubeforgeError> {
         let mut eng = self.engine.lock().unwrap();
         let mut row = Row::new();
         row.insert("video_id".to_string(), v_text(video_id));
@@ -1544,7 +1719,9 @@ impl Db {
         let at = format!("{day}T00:00:00Z");
         let subscribers = match subscribers {
             Some(s) => Some(s),
-            None => eng.get("channels", channel_id)?.and_then(|c| opt_i(&c, "subscriber_count")),
+            None => eng
+                .get("channels", channel_id)?
+                .and_then(|c| opt_i(&c, "subscriber_count")),
         };
         let pk = format!("{channel_id}\x1f{at}");
         let mut row = Row::new();
@@ -1585,9 +1762,18 @@ impl Db {
         row.insert("serp_total".to_string(), Value::Int(serp_total));
         row.insert("serp_mean_views".to_string(), Value::Float(serp_mean_views));
         row.insert("ranking_channels".to_string(), Value::Int(ranking_channels));
-        row.insert("competition_score".to_string(), Value::Float(competition_score));
-        row.insert("opportunity_score".to_string(), Value::Float(opportunity_score));
-        row.insert("actively_published".to_string(), Value::Bool(actively_published));
+        row.insert(
+            "competition_score".to_string(),
+            Value::Float(competition_score),
+        );
+        row.insert(
+            "opportunity_score".to_string(),
+            Value::Float(opportunity_score),
+        );
+        row.insert(
+            "actively_published".to_string(),
+            Value::Bool(actively_published),
+        );
         row.insert("suggested_tags".to_string(), v_json(suggested_tags));
         row.insert("related_keywords".to_string(), v_json(related_keywords));
         let mut tx = eng.begin();
@@ -1620,7 +1806,11 @@ impl Db {
         let dat = self.path.with_extension("dat");
         std::fs::copy(&dat, dest).map_err(|e| TubeforgeError::Storage {
             code: "IO".to_string(),
-            message: format!("copy checkpoint {} -> {}: {e}", dat.display(), dest.display()),
+            message: format!(
+                "copy checkpoint {} -> {}: {e}",
+                dat.display(),
+                dest.display()
+            ),
         })?;
         let dest_dat = dest.with_extension("dat");
         std::fs::copy(&dat, &dest_dat).map_err(|e| TubeforgeError::Storage {
@@ -1780,7 +1970,11 @@ impl Db {
                 source: t(r, "source"),
             })
             .collect();
-        rows.sort_by(|a, b| a.from_entity.cmp(&b.from_entity).then(a.to_entity.cmp(&b.to_entity)));
+        rows.sort_by(|a, b| {
+            a.from_entity
+                .cmp(&b.from_entity)
+                .then(a.to_entity.cmp(&b.to_entity))
+        });
         Ok(rows)
     }
 
@@ -1915,6 +2109,316 @@ impl Db {
         tx.commit()?;
         Ok(())
     }
+
+    // -- greedy bot methods ------------------------------------------------
+
+    pub async fn insert_greedy_seed(
+        &self,
+        seed: &str,
+        source: &str,
+    ) -> Result<i64, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
+        let id = next_id(&eng, "greedy_seeds", "seed_id")?;
+        let now = crate::util::now_rfc3339();
+        let mut row = Row::new();
+        row.insert("seed_id".to_string(), v_int(Some(id)));
+        row.insert("seed".to_string(), v_text(seed));
+        row.insert("source".to_string(), v_text(source));
+        row.insert("added_at".to_string(), v_text(&now));
+        row.insert("active".to_string(), Value::Bool(true));
+        let mut tx = eng.begin();
+        tx.put("greedy_seeds", row)?;
+        tx.commit()?;
+        Ok(id)
+    }
+
+    pub async fn deactivate_greedy_seed(&self, seed_id: i64) -> Result<bool, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
+        let rows = eng.find_eq("greedy_seeds", "seed_id", &Value::Int(seed_id))?;
+        let Some(r) = rows.into_iter().next() else {
+            return Ok(false);
+        };
+        let mut updated = r.clone();
+        updated.insert("active".to_string(), Value::Bool(false));
+        let mut tx = eng.begin();
+        tx.put("greedy_seeds", updated)?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    pub async fn list_greedy_seeds(&self) -> Result<Vec<GreedySeedRow>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
+        let rows = eng.all("greedy_seeds")?;
+        Ok(rows
+            .into_iter()
+            .map(|r| GreedySeedRow {
+                seed_id: i(&r, "seed_id"),
+                seed: t(&r, "seed"),
+                source: t(&r, "source"),
+                added_at: t(&r, "added_at"),
+                active: r.get("active").and_then(|v| v.as_bool()).unwrap_or(false),
+            })
+            .collect())
+    }
+
+    pub async fn greedy_active_seeds(&self) -> Result<Vec<String>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
+        let rows = eng.all("greedy_seeds")?;
+        Ok(rows
+            .into_iter()
+            .filter(|r| r.get("active").and_then(|v| v.as_bool()).unwrap_or(false))
+            .map(|r| t(&r, "seed"))
+            .collect())
+    }
+
+    pub async fn greedy_active_seed_count(&self) -> Result<i64, TubeforgeError> {
+        let seeds = self.greedy_active_seeds().await?;
+        Ok(seeds.len() as i64)
+    }
+
+    pub async fn insert_greedy_history(
+        &self,
+        params: &GreedyHistoryInsert<'_>,
+    ) -> Result<i64, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
+        let id = next_id(&eng, "greedy_research_history", "research_id")?;
+        let mut row = Row::new();
+        row.insert("research_id".to_string(), v_int(Some(id)));
+        row.insert("topic".to_string(), v_text(params.topic));
+        row.insert("researched_at".to_string(), v_text(params.researched_at));
+        row.insert("video_ids_json".to_string(), v_text(params.video_ids_json));
+        row.insert("video_count".to_string(), v_int(Some(params.video_count)));
+        row.insert("mean_views".to_string(), Value::Float(params.mean_views));
+        row.insert("source".to_string(), v_text(params.source));
+        row.insert("duration_ms".to_string(), v_int(Some(params.duration_ms)));
+        let mut tx = eng.begin();
+        tx.put("greedy_research_history", row)?;
+        tx.commit()?;
+        Ok(id)
+    }
+
+    pub async fn greedy_history_for_topic(
+        &self,
+        topic: &str,
+    ) -> Result<Vec<GreedyHistoryRow>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
+        let rows = eng.find_eq(
+            "greedy_research_history",
+            "topic",
+            &Value::Text(topic.to_string()),
+        )?;
+        let mut out: Vec<GreedyHistoryRow> = rows
+            .into_iter()
+            .map(|r| GreedyHistoryRow {
+                research_id: i(&r, "research_id"),
+                topic: t(&r, "topic"),
+                researched_at: t(&r, "researched_at"),
+                video_ids_json: t(&r, "video_ids_json"),
+                video_count: i(&r, "video_count"),
+                mean_views: f(&r, "mean_views"),
+                source: t(&r, "source"),
+                duration_ms: i(&r, "duration_ms"),
+            })
+            .collect();
+        out.sort_by(|a, b| b.researched_at.cmp(&a.researched_at));
+        Ok(out)
+    }
+
+    pub async fn greedy_history_count(&self) -> Result<i64, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
+        Ok(eng.count("greedy_research_history").unwrap_or(0) as i64)
+    }
+
+    pub async fn greedy_unique_topics(&self) -> Result<i64, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
+        let rows = eng.all("greedy_research_history")?;
+        let set: std::collections::HashSet<String> =
+            rows.into_iter().map(|r| t(&r, "topic")).collect();
+        Ok(set.len() as i64)
+    }
+
+    pub async fn insert_greedy_topic_log(
+        &self,
+        topic: &str,
+        status: &str,
+        reason: &str,
+        attempted_at: &str,
+    ) -> Result<i64, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
+        let id = next_id(&eng, "greedy_topic_log", "log_id")?;
+        let mut row = Row::new();
+        row.insert("log_id".to_string(), v_int(Some(id)));
+        row.insert("topic".to_string(), v_text(topic));
+        row.insert("status".to_string(), v_text(status));
+        row.insert("reason".to_string(), v_text(reason));
+        row.insert("attempted_at".to_string(), v_text(attempted_at));
+        let mut tx = eng.begin();
+        tx.put("greedy_topic_log", row)?;
+        tx.commit()?;
+        Ok(id)
+    }
+
+    pub async fn greedy_topic_log_count(&self, status: &str) -> Result<i64, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
+        let rows = eng.find_eq(
+            "greedy_topic_log",
+            "status",
+            &Value::Text(status.to_string()),
+        )?;
+        Ok(rows.len() as i64)
+    }
+
+    pub async fn greedy_top_competitor_tags(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<String>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
+        let mut rows: Vec<(f64, String)> = eng
+            .all("competitor_tags")?
+            .into_iter()
+            .map(|r| (f(&r, "avg_views"), t(&r, "tag_name")))
+            .collect();
+        rows.sort_by(|a, b| b.0.total_cmp(&a.0));
+        rows.truncate(limit);
+        Ok(rows.into_iter().map(|(_, name)| name).collect())
+    }
+
+    pub async fn greedy_recent_related_keywords(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<String>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
+        let mut rows: Vec<(String, String)> = eng
+            .all("keyword_research")?
+            .into_iter()
+            .map(|r| (t(&r, "at"), t(&r, "related_keywords")))
+            .collect();
+        rows.sort_by(|a, b| b.0.cmp(&a.0));
+        rows.truncate(limit);
+        let mut out = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for (_, json_str) in &rows {
+            if let Ok(arr) = serde_json::from_str::<Vec<String>>(json_str) {
+                for kw in arr {
+                    if seen.insert(kw.clone()) {
+                        out.push(kw);
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Auto-discover seed topics from the channel's existing data.
+    ///
+    /// Sources (in priority order):
+    ///   1. Tags the channel uses (tags + video_tags tables)
+    ///   2. Competitor tags (competitor_tags table, ordered by avg_views)
+    ///   3. Keywords already tracked (keywords table)
+    ///   4. Suggested tags from recent keyword research
+    ///   5. Related keywords from recent keyword research
+    ///
+    /// Deduplicates case-insensitively and caps at `limit` total seeds.
+    pub async fn greedy_discover_seeds(&self, limit: usize) -> Result<Vec<String>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut seeds: Vec<String> = Vec::new();
+
+        // 1) Tags the channel uses (from tags + video_tags join)
+        let tag_names: std::collections::HashMap<i64, String> = eng
+            .all("tags")?
+            .into_iter()
+            .map(|r| (i(&r, "tag_id"), t(&r, "name")))
+            .collect();
+        let mut tag_use: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+        for vt in eng.all("video_tags")? {
+            let tid = i(&vt, "tag_id");
+            *tag_use.entry(tid).or_insert(0) += 1;
+        }
+        let mut tag_vec: Vec<(i64, i64)> = tag_use.into_iter().collect();
+        tag_vec.sort_by_key(|b| std::cmp::Reverse(b.1));
+        for (tid, _) in &tag_vec {
+            if let Some(name) = tag_names.get(tid) {
+                let lower = name.to_lowercase();
+                if seen.insert(lower) {
+                    seeds.push(name.clone());
+                }
+            }
+        }
+
+        // 2) Competitor tags (top 100 by avg_views)
+        let mut comp: Vec<(f64, String)> = eng
+            .all("competitor_tags")?
+            .into_iter()
+            .map(|r| (f(&r, "avg_views"), t(&r, "tag_name")))
+            .collect();
+        comp.sort_by(|a, b| b.0.total_cmp(&a.0));
+        comp.truncate(100);
+        for (_, name) in &comp {
+            let lower = name.to_lowercase();
+            if seen.insert(lower) {
+                seeds.push(name.clone());
+            }
+        }
+
+        // 3) Keywords already tracked
+        for kw in eng.all("keywords")? {
+            let name = t(&kw, "keyword");
+            let lower = name.to_lowercase();
+            if seen.insert(lower) {
+                seeds.push(name);
+            }
+        }
+
+        // 4) Suggested tags from recent keyword research (last 50 rows)
+        let mut research_rows: Vec<(String, String, String)> = eng
+            .all("keyword_research")?
+            .into_iter()
+            .map(|r| {
+                (
+                    t(&r, "at"),
+                    t(&r, "suggested_tags"),
+                    t(&r, "related_keywords"),
+                )
+            })
+            .collect();
+        research_rows.sort_by(|a, b| b.0.cmp(&a.0));
+        research_rows.truncate(50);
+        for (_, suggested_json, related_json) in &research_rows {
+            if let Ok(arr) = serde_json::from_str::<Vec<String>>(suggested_json) {
+                for tag in arr {
+                    let lower = tag.to_lowercase();
+                    if seen.insert(lower) {
+                        seeds.push(tag);
+                    }
+                }
+            }
+            if let Ok(arr) = serde_json::from_str::<Vec<String>>(related_json) {
+                for kw in arr {
+                    let lower = kw.to_lowercase();
+                    if seen.insert(lower) {
+                        seeds.push(kw);
+                    }
+                }
+            }
+        }
+
+        seeds.truncate(limit);
+        Ok(seeds)
+    }
 }
 
 /// The write side of one ingest batch. tfdb's `Tx` offers no read access (its
@@ -1942,7 +2446,11 @@ impl Batch<'_> {
         Ok(())
     }
 
-    pub async fn merge_channel(&mut self, old_id: &str, new_id: &str) -> Result<(), TubeforgeError> {
+    pub async fn merge_channel(
+        &mut self,
+        old_id: &str,
+        new_id: &str,
+    ) -> Result<(), TubeforgeError> {
         let mut eng = self.db.engine.lock().unwrap();
         let videos = eng.find_eq("videos", "channel_id", &Value::Text(old_id.to_string()))?;
         let comp_old = eng.get("competitors", old_id)?;
@@ -2081,7 +2589,10 @@ fn alert_exists_engine(eng: &Engine, kind: &str, channel_id: Option<&str>, messa
 
 /// Ensure a tag exists, returning its id (insert-or-ignore semantics).
 fn ensure_tag(eng: &mut Engine, name: &str) -> Result<i64, TubeforgeError> {
-    if let Some(row) = eng.find_eq("tags", "name", &Value::Text(name.to_string()))?.first() {
+    if let Some(row) = eng
+        .find_eq("tags", "name", &Value::Text(name.to_string()))?
+        .first()
+    {
         return Ok(i(row, "tag_id"));
     }
     let id = next_id(eng, "tags", "tag_id")?;
@@ -2180,7 +2691,10 @@ pub async fn persist_serp_db(
             let tag_id = ensure_tag(&mut eng, tag)?;
             if tag_id > 0 {
                 let mut vrow = Row::new();
-                vrow.insert("video_tag_id".to_string(), v_text(format!("{}\x1f{tag_id}", r.video_id)));
+                vrow.insert(
+                    "video_tag_id".to_string(),
+                    v_text(format!("{}\x1f{tag_id}", r.video_id)),
+                );
                 vrow.insert("video_id".to_string(), v_text(&r.video_id));
                 vrow.insert("tag_id".to_string(), Value::Int(tag_id));
                 vrow.insert("position".to_string(), Value::Int(pos as i64));
@@ -2216,7 +2730,10 @@ pub async fn dedupe_videos(db: &Db) -> Result<(usize, usize), TubeforgeError> {
     let mut groups: HashMap<(String, String), Vec<&VideoRow>> = HashMap::new();
     for v in &videos {
         if let Some(cid) = &v.channel_id {
-            groups.entry((cid.clone(), v.title.clone())).or_default().push(v);
+            groups
+                .entry((cid.clone(), v.title.clone()))
+                .or_default()
+                .push(v);
         }
     }
 
@@ -2227,7 +2744,11 @@ pub async fn dedupe_videos(db: &Db) -> Result<(usize, usize), TubeforgeError> {
         let mut winner = group[0];
         for v in &group[1..] {
             let rank = |x: &VideoRow| {
-                let desc = if x.description.trim().is_empty() { 0 } else { 1 };
+                let desc = if x.description.trim().is_empty() {
+                    0
+                } else {
+                    1
+                };
                 (desc, x.view_count.unwrap_or(0))
             };
             if rank(v) > rank(winner) {
@@ -2235,7 +2756,11 @@ pub async fn dedupe_videos(db: &Db) -> Result<(usize, usize), TubeforgeError> {
             }
         }
         let winner_video_tags: HashMap<i64, bool> = eng
-            .find_eq("video_tags", "video_id", &Value::Text(winner.video_id.clone()))?
+            .find_eq(
+                "video_tags",
+                "video_id",
+                &Value::Text(winner.video_id.clone()),
+            )?
             .into_iter()
             .map(|r| (i(&r, "tag_id"), true))
             .collect();
@@ -2245,10 +2770,12 @@ pub async fn dedupe_videos(db: &Db) -> Result<(usize, usize), TubeforgeError> {
                 continue;
             }
             let vts = eng.find_eq("video_tags", "video_id", &Value::Text(v.video_id.clone()))?;
-            let comments =
-                eng.find_eq("comments", "video_id", &Value::Text(v.video_id.clone()))?;
-            let krs =
-                eng.find_eq("keyword_rankings", "video_id", &Value::Text(v.video_id.clone()))?;
+            let comments = eng.find_eq("comments", "video_id", &Value::Text(v.video_id.clone()))?;
+            let krs = eng.find_eq(
+                "keyword_rankings",
+                "video_id",
+                &Value::Text(v.video_id.clone()),
+            )?;
             let idrs = eng.find_eq("ideas", "source_video", &Value::Text(v.video_id.clone()))?;
 
             let mut tx = eng.begin();
@@ -2368,7 +2895,9 @@ mod tests {
     fn upsert_score_roundtrip() {
         let (_d, db) = open_test();
         block_on(db.upsert_score("v1", 0.5, 0.25, 0.75, "{\"seo\":1}")).unwrap();
-        let s = block_on(db.get_score("v1")).unwrap().expect("score present");
+        let s = block_on(db.get_score("v1"))
+            .unwrap()
+            .expect("score present");
         assert_eq!(s.video_id, "v1");
         assert_eq!(s.seo_score, 0.5);
         assert_eq!(s.geo_score, 0.25);
@@ -2385,9 +2914,15 @@ mod tests {
         let (_d, db) = open_test();
         assert_eq!(block_on(db.meta_get("nope")).unwrap(), None);
         block_on(db.meta_set("foo", "bar")).unwrap();
-        assert_eq!(block_on(db.meta_get("foo")).unwrap(), Some("bar".to_string()));
+        assert_eq!(
+            block_on(db.meta_get("foo")).unwrap(),
+            Some("bar".to_string())
+        );
         block_on(db.meta_set("foo", "baz")).unwrap();
-        assert_eq!(block_on(db.meta_get("foo")).unwrap(), Some("baz".to_string()));
+        assert_eq!(
+            block_on(db.meta_get("foo")).unwrap(),
+            Some("baz".to_string())
+        );
         assert_eq!(block_on(db.user_version()).unwrap(), SCHEMA_VERSION);
     }
 
@@ -2401,8 +2936,10 @@ mod tests {
         block_on(db.upsert_ranking("alpha", "2026-01-01", Some("v3"), Some(3), None)).unwrap();
 
         let rows = block_on(db.list_rankings()).unwrap();
-        let keys: Vec<(String, String)> =
-            rows.iter().map(|r| (r.keyword.clone(), r.checked_at.clone())).collect();
+        let keys: Vec<(String, String)> = rows
+            .iter()
+            .map(|r| (r.keyword.clone(), r.checked_at.clone()))
+            .collect();
         assert_eq!(
             keys,
             vec![
@@ -2414,7 +2951,9 @@ mod tests {
         assert_eq!(block_on(db.ranking_count_at("2026-01-01")).unwrap(), 2);
         // Same-instant overwrite means only one row per (keyword, checked_at).
         assert_eq!(
-            rows.iter().filter(|r| r.keyword == "alpha" && r.checked_at == "2026-01-01").count(),
+            rows.iter()
+                .filter(|r| r.keyword == "alpha" && r.checked_at == "2026-01-01")
+                .count(),
             1
         );
     }
@@ -2433,8 +2972,11 @@ mod tests {
         }
         block_on(batch.commit()).unwrap();
 
-        let ids: Vec<String> =
-            block_on(db.all_videos()).unwrap().into_iter().map(|v| v.video_id).collect();
+        let ids: Vec<String> = block_on(db.all_videos())
+            .unwrap()
+            .into_iter()
+            .map(|v| v.video_id)
+            .collect();
         assert_eq!(ids, vec!["a".to_string(), "b".to_string(), "c".to_string()]);
     }
 
@@ -2448,17 +2990,35 @@ mod tests {
         assert_eq!(marked, 2);
         let ideas = block_on(db.all_ideas()).unwrap();
         assert!(ideas.iter().all(|i| i.status == "saved"));
-        assert_eq!(block_on(db.set_idea_statuses(&[999_999], "discarded")).unwrap(), 0);
+        assert_eq!(
+            block_on(db.set_idea_statuses(&[999_999], "discarded")).unwrap(),
+            0
+        );
     }
 
     #[test]
     fn insert_alert_dedupes() {
         let (_d, db) = open_test();
-        assert_eq!(block_on(db.insert_alert("brand", Some("c1"), "msg", "info")).unwrap(), 1);
-        assert_eq!(block_on(db.insert_alert("brand", Some("c1"), "msg", "info")).unwrap(), 0);
-        assert_eq!(block_on(db.insert_alert("brand", Some("c2"), "msg", "info")).unwrap(), 1);
-        assert_eq!(block_on(db.insert_alert("brand", None, "msg", "info")).unwrap(), 1);
-        assert_eq!(block_on(db.insert_alert("brand", None, "msg", "info")).unwrap(), 0);
+        assert_eq!(
+            block_on(db.insert_alert("brand", Some("c1"), "msg", "info")).unwrap(),
+            1
+        );
+        assert_eq!(
+            block_on(db.insert_alert("brand", Some("c1"), "msg", "info")).unwrap(),
+            0
+        );
+        assert_eq!(
+            block_on(db.insert_alert("brand", Some("c2"), "msg", "info")).unwrap(),
+            1
+        );
+        assert_eq!(
+            block_on(db.insert_alert("brand", None, "msg", "info")).unwrap(),
+            1
+        );
+        assert_eq!(
+            block_on(db.insert_alert("brand", None, "msg", "info")).unwrap(),
+            0
+        );
         assert_eq!(block_on(db.list_alerts(0)).unwrap().len(), 3);
     }
 }

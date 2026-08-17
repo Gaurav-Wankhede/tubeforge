@@ -32,6 +32,17 @@
 
 > **PRD/LLD amendment required:** `PRD.md` §1 and §4 currently state "No page scraping of any kind." yt-dlp is NOT page scraping (it uses YouTube's InnerTube JSON API), but the amendment should still note the optional keyless enrichment path, no auth, rate-limited, user-controlled.
 
+### Greedy Bot (autonomous topic research)
+
+The greedy bot automates topic discovery and SERP research using the channel's own data as input. It runs as a CLI command or a long-running daemon.
+
+**Data flow:**
+1. `greedy seeds init` — auto-discovers seed topics from 5 sources: competitor tags (top by avg_views), channel's own video tags, tracked keywords, suggested tags from research, related keywords from research.
+2. `greedy run` — generates candidates from autocomplete suggestions, competitor tags, related keywords, and seed drift. Checks 24h cooldown, deduplicates against research history, and researches eligible topics via the existing `keywords research` pipeline (yt-dlp SERP + tags + autocomplete).
+3. `greedy daemon` — runs `greedy run` on a configurable interval (default 1h). PID file at `~/.tubeforge/greedy.pid`. Handles SIGINT/SIGTERM for graceful shutdown. `greedy stop` sends SIGTERM via the PID file.
+
+**Storage:** 3 new tables (schema v10): `greedy_seeds`, `greedy_research_history`, `greedy_topic_log`. Dedup is case-insensitive. Cooldown is 24h per topic.
+
 ---
 
 ## Daily competitor refresh workflow (API-first)
