@@ -29,7 +29,6 @@ use crate::serve::web::{self, Response, ServeState};
 use crate::serve::AppState;
 use crate::storage::db::{Db, VideoRow};
 
-
 /// SEO component keys in canonical display order (matches `scoring::seo`).
 const SEO_COMPONENT_KEYS: [&str; 15] = [
     "keyword_title",
@@ -124,7 +123,11 @@ async fn handle_socket(state: AppState, socket: web::ws::WebSocket) {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     let forwarder = tokio::spawn(async move {
         while let Some(text) = rx.recv().await {
-            if sink.send(web::ws::Message::Text(text.into())).await.is_err() {
+            if sink
+                .send(web::ws::Message::Text(text.into()))
+                .await
+                .is_err()
+            {
                 break; // client disconnected
             }
         }

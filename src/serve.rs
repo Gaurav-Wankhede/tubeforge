@@ -47,8 +47,8 @@ use svg::sparkline;
 use templates::*;
 use web::sse::{Event, KeepAlive, Sse};
 use web::{
-    get, post, Headers, Html, IntoResponse, Path, Query, ReqUri, Response,
-    Router, ServeState, State,
+    get, post, Headers, Html, IntoResponse, Path, Query, ReqUri, Response, Router, ServeState,
+    State,
 };
 
 /// The 15 SEO component keys in canonical display order (LLD §7.2 +
@@ -742,7 +742,10 @@ async fn healthz() -> Response {
 async fn htmx_js() -> Response {
     (
         StatusCode::OK,
-        [(http::header::CONTENT_TYPE.as_str(), "application/javascript")],
+        [(
+            http::header::CONTENT_TYPE.as_str(),
+            "application/javascript",
+        )],
         include_str!("../static/htmx.min.js"),
     )
         .into_response()
@@ -755,7 +758,10 @@ async fn htmx_js() -> Response {
 async fn sse_js() -> Response {
     (
         StatusCode::OK,
-        [(http::header::CONTENT_TYPE.as_str(), "application/javascript")],
+        [(
+            http::header::CONTENT_TYPE.as_str(),
+            "application/javascript",
+        )],
         include_str!("../static/sse.js"),
     )
         .into_response()

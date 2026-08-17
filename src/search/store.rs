@@ -174,7 +174,11 @@ impl Store {
         self.snap.description_len.remove(removed as usize);
         self.snap.tags_len.remove(removed as usize);
         // Shift doc ids above `removed` down by one in every index.
-        for map in [&mut self.snap.title, &mut self.snap.description, &mut self.snap.tags] {
+        for map in [
+            &mut self.snap.title,
+            &mut self.snap.description,
+            &mut self.snap.tags,
+        ] {
             map.retain(|_, postings| {
                 postings.retain(|p| p.doc != removed);
                 postings.iter_mut().for_each(|p| {
@@ -228,7 +232,8 @@ impl Store {
     }
 
     pub fn video_id(&self, doc: u32) -> &str {
-        self.snap.docs
+        self.snap
+            .docs
             .get(doc as usize)
             .map(|d| d.video_id.as_str())
             .unwrap_or_default()
@@ -336,28 +341,28 @@ impl Store {
     /// snapshot was NOT durable.
     pub fn persist(&self, path: &Path) -> Result<u64, TubeforgeError> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| index_err(format!(
-                "create index dir {}: {e}",
-                parent.display()
-            )))?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| index_err(format!("create index dir {}: {e}", parent.display())))?;
         }
         let json = serde_json::to_vec(&self.snap)
             .map_err(|e| index_err(format!("serialize index: {e}")))?;
         let tmp = path.with_extension("json.tmp");
         {
-            let mut f = std::fs::File::create(&tmp).map_err(|e| index_err(format!(
-                "create temp index {}: {e}",
-                tmp.display()
-            )))?;
+            let mut f = std::fs::File::create(&tmp)
+                .map_err(|e| index_err(format!("create temp index {}: {e}", tmp.display())))?;
             use std::io::Write;
-            f.write_all(&json).map_err(|e| index_err(format!("write index: {e}")))?;
-            f.sync_all().map_err(|e| index_err(format!("fsync index: {e}")))?;
+            f.write_all(&json)
+                .map_err(|e| index_err(format!("write index: {e}")))?;
+            f.sync_all()
+                .map_err(|e| index_err(format!("fsync index: {e}")))?;
         }
-        std::fs::rename(&tmp, path).map_err(|e| index_err(format!(
-            "atomic-rename index {} -> {}: {e}",
-            tmp.display(),
-            path.display()
-        )))?;
+        std::fs::rename(&tmp, path).map_err(|e| {
+            index_err(format!(
+                "atomic-rename index {} -> {}: {e}",
+                tmp.display(),
+                path.display()
+            ))
+        })?;
         Ok(self.num_docs())
     }
 
@@ -367,14 +372,10 @@ impl Store {
         if !path.exists() {
             return Ok(Store::new());
         }
-        let bytes = std::fs::read(path).map_err(|e| index_err(format!(
-            "read index {}: {e}",
-            path.display()
-        )))?;
-        let snap: Snapshot = serde_json::from_slice(&bytes).map_err(|e| index_err(format!(
-            "decode index {}: {e}",
-            path.display()
-        )))?;
+        let bytes = std::fs::read(path)
+            .map_err(|e| index_err(format!("read index {}: {e}", path.display())))?;
+        let snap: Snapshot = serde_json::from_slice(&bytes)
+            .map_err(|e| index_err(format!("decode index {}: {e}", path.display())))?;
         if snap.version != STORE_VERSION {
             return Err(index_err(format!(
                 "index {} version {} != expected {STORE_VERSION} — rebuild with `tubeforge reindex`",
@@ -382,7 +383,10 @@ impl Store {
                 snap.version
             )));
         }
-        let mut store = Store { snap, by_video_id: HashMap::new() };
+        let mut store = Store {
+            snap,
+            by_video_id: HashMap::new(),
+        };
         for (i, d) in store.snap.docs.iter().enumerate() {
             store.by_video_id.insert(d.video_id.clone(), i as u32);
         }
@@ -504,7 +508,8 @@ mod tests {
         let mut s = Store::new();
         s.upsert(doc("a", "rust database engineering"));
         s.upsert(doc("b", "paseto vs jwt"));
-        s.persist(&dir.path().join(Store::file_name())).expect("persist");
+        s.persist(&dir.path().join(Store::file_name()))
+            .expect("persist");
         let loaded = Store::load(&dir.path().join(Store::file_name())).expect("load");
         assert_eq!(loaded.num_docs(), 2);
         assert_eq!(loaded.matches(FieldName::Title, "database").len(), 1);

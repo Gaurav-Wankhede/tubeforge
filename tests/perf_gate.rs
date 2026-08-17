@@ -405,7 +405,8 @@ async fn perf_gate_5k_videos_ingest_reindex_ideas_under_30s() {
     {
         let mut writer = index.writer(50_000_000);
         for d in &docs {
-            tubeforge::search::index::upsert(&mut writer, &tubeforge::search::Schema, d).expect("index upsert");
+            tubeforge::search::index::upsert(&mut writer, &tubeforge::search::Schema, d)
+                .expect("index upsert");
         }
         writer.commit().expect("index commit");
     }

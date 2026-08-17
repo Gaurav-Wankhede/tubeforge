@@ -76,7 +76,10 @@ impl Bm25 {
             return Vec::new();
         };
         let s = self.store.read().unwrap_or_else(|p| p.into_inner());
-        s.matches(field, query).into_iter().take(COLLECT_LIMIT).collect()
+        s.matches(field, query)
+            .into_iter()
+            .take(COLLECT_LIMIT)
+            .collect()
     }
 
     pub fn num_docs(&self) -> u64 {

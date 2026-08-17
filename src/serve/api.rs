@@ -8,8 +8,8 @@
 
 use std::collections::HashMap;
 
-use http::StatusCode;
 use crate::serve::web::{get, post, Json, Path, Query, Router, State};
+use http::StatusCode;
 use serde_json::{json, Value};
 
 use super::AppState;
@@ -99,10 +99,7 @@ pub fn api_routes() -> Router {
 /// fallback_service catches unmatched paths, so the API must own its
 /// 404s explicitly or `/api/typo` would serve index.html.
 async fn api_not_found() -> (StatusCode, Json) {
-    (
-        StatusCode::NOT_FOUND,
-        Json(json!({ "error": "not_found" })),
-    )
+    (StatusCode::NOT_FOUND, Json(json!({ "error": "not_found" })))
 }
 
 // ---------------------------------------------------------------------------
@@ -117,9 +114,7 @@ async fn healthz_api() -> (StatusCode, Json) {
 /// GET /api/counts — aggregate entity counts from the health report.
 ///
 /// Enhanced with `kg_built` and `kg_stats` when the Knowledge Graph is available.
-async fn counts_api(
-    State(st): State<AppState>,
-) -> Result<Json, (StatusCode, Json)> {
+async fn counts_api(State(st): State<AppState>) -> Result<Json, (StatusCode, Json)> {
     let stale = super::stale_days();
     let h = reports::health(&st.db, stale).await.map_err(api_err)?;
     let counts = &h["counts"];
@@ -148,9 +143,7 @@ async fn counts_api(
 /// `channel_snapshots` (subscriber/video/view history written on every
 /// refresh). Aggregates total_views across all channels per snapshot date,
 /// so the Dashboard's "Views (30 days)" chart shows actual growth history.
-async fn trends_api(
-    State(st): State<AppState>,
-) -> Result<Json, (StatusCode, Json)> {
+async fn trends_api(State(st): State<AppState>) -> Result<Json, (StatusCode, Json)> {
     let channels = st.db.all_channels().await.map_err(api_err)?;
     let mut by_date: std::collections::BTreeMap<String, (i64, i64, i64)> =
         std::collections::BTreeMap::new();
@@ -183,9 +176,7 @@ async fn trends_api(
 }
 
 /// GET /api/alerts — newest alerts first.
-async fn alerts_api(
-    State(st): State<AppState>,
-) -> Result<Json, (StatusCode, Json)> {
+async fn alerts_api(State(st): State<AppState>) -> Result<Json, (StatusCode, Json)> {
     let alerts = st.db.list_alerts(100).await.map_err(api_err)?;
     let items: Vec<Value> = alerts
         .iter()
@@ -204,17 +195,13 @@ async fn alerts_api(
 }
 
 /// POST /api/alerts/read — mark all alerts read (200 OK).
-async fn alerts_read_api(
-    State(st): State<AppState>,
-) -> Result<StatusCode, (StatusCode, Json)> {
+async fn alerts_read_api(State(st): State<AppState>) -> Result<StatusCode, (StatusCode, Json)> {
     st.db.mark_alerts_read().await.map_err(api_err)?;
     Ok(StatusCode::OK)
 }
 
 /// POST /api/alerts/clear — delete all alerts (200 OK).
-async fn alerts_clear_api(
-    State(st): State<AppState>,
-) -> Result<StatusCode, (StatusCode, Json)> {
+async fn alerts_clear_api(State(st): State<AppState>) -> Result<StatusCode, (StatusCode, Json)> {
     st.db.clear_alerts().await.map_err(api_err)?;
     Ok(StatusCode::OK)
 }
@@ -681,9 +668,7 @@ async fn compute_graph_ideas(st: &AppState, _videos: &[crate::storage::db::Video
 }
 
 /// GET /api/keywords — keyword rankings with trends and sparkline data.
-async fn keywords_api(
-    State(st): State<AppState>,
-) -> Result<Json, (StatusCode, Json)> {
+async fn keywords_api(State(st): State<AppState>) -> Result<Json, (StatusCode, Json)> {
     let rankings = st.db.list_rankings().await.map_err(api_err)?;
     let trends = trend_rows(&rankings);
     let items: Vec<Value> = trends
@@ -707,9 +692,7 @@ async fn keywords_api(
 /// GET /api/keywords/trending — trending keywords: latest research snapshot
 /// per keyword, ranked by opportunity score DESC (VidIQ-style). Feeds the
 /// frontend's `trendingKeywords` call.
-async fn keywords_trending_api(
-    State(st): State<AppState>,
-) -> Result<Json, (StatusCode, Json)> {
+async fn keywords_trending_api(State(st): State<AppState>) -> Result<Json, (StatusCode, Json)> {
     let rows = st.db.keyword_trending(50).await.map_err(api_err)?;
     let items: Vec<Value> = rows
         .iter()
@@ -725,9 +708,7 @@ async fn keywords_trending_api(
             })
         })
         .collect();
-    Ok(Json(
-        json!({ "trending": items, "total": items.len() }),
-    ))
+    Ok(Json(json!({ "trending": items, "total": items.len() })))
 }
 
 /// GET /api/keywords/inspect?q=<topic>&serp=N — VidIQ-style keyword
@@ -880,9 +861,7 @@ async fn keywords_history_api(
 /// Enhanced with `centrality` ranking when the Knowledge Graph is available.
 /// Each row includes a `centrality` field (PageRank score, 0-1) that is
 /// `null` when KG is not built (backward compatible).
-async fn scorecard_api(
-    State(st): State<AppState>,
-) -> Result<Json, (StatusCode, Json)> {
+async fn scorecard_api(State(st): State<AppState>) -> Result<Json, (StatusCode, Json)> {
     // Comparison set = competitors + our own channel (when set), so the
     // dashboard always shows OUR channel against the competitors it must beat.
     let mut only: Vec<String> = st.db.list_competitors().await.map_err(api_err)?;
@@ -966,9 +945,7 @@ async fn scorecard_api(
 
 /// GET /api/audit — VidIQ-style Channel Audit for every stored channel
 /// (composite 0-100 + per-component breakdown).
-async fn audit_api(
-    State(st): State<AppState>,
-) -> Result<Json, (StatusCode, Json)> {
+async fn audit_api(State(st): State<AppState>) -> Result<Json, (StatusCode, Json)> {
     let audits = crate::analytics::audit::audit_all(&st.db)
         .await
         .map_err(api_err)?;
@@ -1060,9 +1037,7 @@ async fn gap_channel_names(db: &Db) -> std::collections::HashMap<String, String>
 /// Enhanced with `graph_gaps` when the Knowledge Graph is available.
 /// Graph gaps are topics with high demand but low supply, detected via
 /// community analysis. The field is `null` when KG is not built.
-async fn gaps_api(
-    State(st): State<AppState>,
-) -> Result<Json, (StatusCode, Json)> {
+async fn gaps_api(State(st): State<AppState>) -> Result<Json, (StatusCode, Json)> {
     let videos = st.db.all_videos().await.map_err(api_err)?;
     if videos.is_empty() {
         return Ok(Json(json!({
@@ -1149,9 +1124,7 @@ async fn compute_graph_gaps(st: &AppState) -> Value {
 }
 
 /// GET /api/gaps/outliers — videos ≥3× their channel's mean views.
-async fn gaps_outliers_api(
-    State(st): State<AppState>,
-) -> Result<Json, (StatusCode, Json)> {
+async fn gaps_outliers_api(State(st): State<AppState>) -> Result<Json, (StatusCode, Json)> {
     let videos = st.db.all_videos().await.map_err(api_err)?;
     let names = gap_channel_names(&st.db).await;
     let rows: Vec<Value> = crate::analytics::gaps::outliers(&videos, &names)
@@ -1172,9 +1145,7 @@ async fn gaps_outliers_api(
 }
 
 /// GET /api/gaps/coverage — topic × channel coverage matrix.
-async fn gaps_coverage_api(
-    State(st): State<AppState>,
-) -> Result<Json, (StatusCode, Json)> {
+async fn gaps_coverage_api(State(st): State<AppState>) -> Result<Json, (StatusCode, Json)> {
     let videos = st.db.all_videos().await.map_err(api_err)?;
     let rows: Vec<Value> = crate::analytics::gaps::coverage(&videos)
         .iter()
@@ -1196,9 +1167,7 @@ async fn gaps_coverage_api(
 }
 
 /// GET /api/transcripts — inventory of stored transcripts.
-async fn transcripts_api(
-    State(st): State<AppState>,
-) -> Result<Json, (StatusCode, Json)> {
+async fn transcripts_api(State(st): State<AppState>) -> Result<Json, (StatusCode, Json)> {
     let rows = st.db.list_transcripts().await.map_err(api_err)?;
     let items: Vec<Value> = rows
         .iter()
@@ -1212,9 +1181,7 @@ async fn transcripts_api(
             })
         })
         .collect();
-    Ok(Json(
-        json!({ "transcripts": items, "total": items.len() }),
-    ))
+    Ok(Json(json!({ "transcripts": items, "total": items.len() })))
 }
 
 /// GET /api/transcripts/:id — one video's transcript text.
@@ -1270,18 +1237,14 @@ async fn comments_api(
 }
 
 /// GET /api/health — full health report as JSON.
-async fn health_api(
-    State(st): State<AppState>,
-) -> Result<Json, (StatusCode, Json)> {
+async fn health_api(State(st): State<AppState>) -> Result<Json, (StatusCode, Json)> {
     let stale = super::stale_days();
     let h = reports::health(&st.db, stale).await.map_err(api_err)?;
     Ok(Json(h))
 }
 
 /// GET /api/tags — tag cloud with counts and trends.
-async fn tags_cloud_api(
-    State(st): State<AppState>,
-) -> Result<Json, (StatusCode, Json)> {
+async fn tags_cloud_api(State(st): State<AppState>) -> Result<Json, (StatusCode, Json)> {
     let cloud = tags::tag_cloud(&st.db).await.map_err(api_err)?;
     Ok(Json(serde_json::to_value(cloud).unwrap()))
 }
@@ -1291,9 +1254,7 @@ async fn tags_cloud_api(
 /// Enhanced with `tag_authority` scores when the Knowledge Graph is available.
 /// Each tag gap includes a `tag_authority` field (0-100) representing the
 /// mean centrality of channels using that tag. `null` when KG not built.
-async fn tags_gaps_api(
-    State(st): State<AppState>,
-) -> Result<Json, (StatusCode, Json)> {
+async fn tags_gaps_api(State(st): State<AppState>) -> Result<Json, (StatusCode, Json)> {
     // Get own channel ID from config or first owned channel
     let own_channel_id = get_own_channel_id(&st.db).await.map_err(api_err)?;
     let gaps = tags::tag_gaps(&st.db, &own_channel_id)

@@ -20,7 +20,10 @@ fn open(path: &std::path::Path) -> Engine {
 }
 
 fn row(pairs: &[(&str, Value)]) -> BTreeMap<String, Value> {
-    pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+    pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.clone()))
+        .collect()
 }
 
 #[test]
@@ -62,7 +65,10 @@ fn videos_and_channels_roundtrip() {
     let v = e.get("videos", "vid1").expect("get").expect("present");
     assert_eq!(v["channel_id"], Value::Text("UC1".into()));
     assert_eq!(v["title"], Value::Text("Rust DB Guide".into()));
-    assert_eq!(v["tags"], Value::Json(serde_json::json!(["rust", "database"])));
+    assert_eq!(
+        v["tags"],
+        Value::Json(serde_json::json!(["rust", "database"]))
+    );
     let c = e.get("channels", "UC1").expect("get").expect("present");
     assert_eq!(c["title"], Value::Text("Tech Verse".into()));
     assert_eq!(e.count("videos").expect("count"), 1);
@@ -109,7 +115,10 @@ fn scores_and_ideas_roundtrip_with_json_columns() {
     let s = e.get("scores", "vid1").expect("get").expect("present");
     assert_eq!(s["seo_score"], Value::Float(77.8));
     let i = e.get("ideas", "1").expect("get").expect("present");
-    assert_eq!(i["title_suggestion"], Value::Text("Next video topic".into()));
+    assert_eq!(
+        i["title_suggestion"],
+        Value::Text("Next video topic".into())
+    );
     assert_eq!(i["rationale"], Value::Json(serde_json::json!({"gap": 0.9})));
 }
 
@@ -136,7 +145,9 @@ fn kg_relations_persist_and_query() {
         tx.commit().expect("commit");
     }
     let e = open(&db);
-    let rows = e.find_eq("kg_entities", "entity_type", &Value::Text("tag".into())).expect("find");
+    let rows = e
+        .find_eq("kg_entities", "entity_type", &Value::Text("tag".into()))
+        .expect("find");
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["canonical_name"], Value::Text("rust".into()));
     // Update centrality in place.
@@ -149,7 +160,10 @@ fn kg_relations_persist_and_query() {
         tx.commit().expect("commit");
     }
     let e = open(&db);
-    assert_eq!(e.get("kg_entities", "e1").expect("get").expect("p")["centrality"], Value::Float(0.42));
+    assert_eq!(
+        e.get("kg_entities", "e1").expect("get").expect("p")["centrality"],
+        Value::Float(0.42)
+    );
 }
 
 #[test]
@@ -170,7 +184,10 @@ fn meta_key_value_store() {
         tx.commit().expect("commit");
     }
     let e = open(&db);
-    let m = e.get("meta", "schema_version").expect("get").expect("present");
+    let m = e
+        .get("meta", "schema_version")
+        .expect("get")
+        .expect("present");
     assert_eq!(m["value"], Value::Text("9".into()));
 }
 

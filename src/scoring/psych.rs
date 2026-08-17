@@ -103,15 +103,33 @@ pub fn score(title: &str) -> PsychScore {
 /// harsh truths, etc.) — boosts the precise-number pattern.
 fn extreme_outcome_present(lower: &str) -> bool {
     const OUTCOME_WORDS: [&str; 14] = [
-        "truth", "brutal", "mistake", "mistakes", "secret", "earn", "views", "subscribers",
-        "money", "income", "million", "thousand", "double", "grow",
+        "truth",
+        "brutal",
+        "mistake",
+        "mistakes",
+        "secret",
+        "earn",
+        "views",
+        "subscribers",
+        "money",
+        "income",
+        "million",
+        "thousand",
+        "double",
+        "grow",
     ];
     OUTCOME_WORDS.iter().any(|w| lower.contains(w))
 }
 
 /// The identity/audience constraint words for the how-to pattern.
 const IDENTITY_WORDS: [&str; 8] = [
-    "beginners", "developers", "engineers", "startups", "over 40", "over 30", "for kids",
+    "beginners",
+    "developers",
+    "engineers",
+    "startups",
+    "over 40",
+    "over 30",
+    "for kids",
     "for women",
 ];
 
@@ -135,9 +153,19 @@ fn evidence(f: TitleFormula, lower: &str, original: &str) -> Option<String> {
         }
         TitleFormula::ForbiddenKnowledge => {
             const WORDS: [&str; 13] = [
-                "feels illegal", "feel illegal", "nobody tells", "no one tells",
-                "they don't want you", "the secret", "secret that", "hidden", "forbidden",
-                "not allowed", "never told", "aren't told", "aren’t told",
+                "feels illegal",
+                "feel illegal",
+                "nobody tells",
+                "no one tells",
+                "they don't want you",
+                "the secret",
+                "secret that",
+                "hidden",
+                "forbidden",
+                "not allowed",
+                "never told",
+                "aren't told",
+                "aren’t told",
             ];
             first_match(lower, &WORDS)
         }
@@ -164,9 +192,7 @@ fn first_match(lower: &str, words: &'static [&'static str]) -> Option<&'static s
 fn precise_number(lower: &str) -> Option<&'static str> {
     // Only match 2-3 digit "small precise" numbers (round 10s like "10" are
     // deliberately excluded — the pattern is about non-round precision).
-    let has_digit = lower
-        .chars()
-        .any(|c| c.is_ascii_digit());
+    let has_digit = lower.chars().any(|c| c.is_ascii_digit());
     if !has_digit {
         return None;
     }
@@ -305,7 +331,8 @@ mod tests {
 
     #[test]
     fn multiple_patterns_accumulate_capped_at_100() {
-        let s = score("The 7 Secrets That Feel Illegal to Earn $1M — Nobody Tells You in 60 Seconds");
+        let s =
+            score("The 7 Secrets That Feel Illegal to Earn $1M — Nobody Tells You in 60 Seconds");
         // precise + forbidden + income + time-anchor + (how-to absent) = 80 + bonus.
         assert!(s.total >= 80.0);
         assert!(s.total <= 100.0);

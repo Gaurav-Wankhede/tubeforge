@@ -482,8 +482,7 @@ fn kg_entity_from_row(row: &crate::storage::db::KgEntityRow) -> KgEntity {
         _ => EntityType::Entity,
     };
 
-    let properties: serde_json::Value =
-        serde_json::from_str(&row.properties).unwrap_or_default();
+    let properties: serde_json::Value = serde_json::from_str(&row.properties).unwrap_or_default();
 
     KgEntity {
         entity_id: row.entity_id.clone(),

@@ -242,7 +242,12 @@ impl Engine {
     }
 
     /// Rows whose `col` equals `value` (linear scan — small tables).
-    pub fn find_eq(&self, table: &str, col: &str, value: &Value) -> Result<Vec<Row>, TubeforgeError> {
+    pub fn find_eq(
+        &self,
+        table: &str,
+        col: &str,
+        value: &Value,
+    ) -> Result<Vec<Row>, TubeforgeError> {
         self.table(table)?;
         Ok(self
             .data
@@ -287,21 +292,27 @@ impl Engine {
 
     fn commit_wal(&mut self, ops: &[WalOp]) -> Result<(), TubeforgeError> {
         let seq = self.wal_seq() + 1;
-        let rec = WalRecord { seq, ops: ops.to_vec() };
+        let rec = WalRecord {
+            seq,
+            ops: ops.to_vec(),
+        };
         let bytes = bincode_encode(&rec)?;
         let wal = self
             .wal
             .as_mut()
             .ok_or_else(|| storage_err("WAL", "WAL not open for append"))?;
-        wal.write_all(WAL_MAGIC).map_err(|e| storage_err("WAL", e.to_string()))?;
+        wal.write_all(WAL_MAGIC)
+            .map_err(|e| storage_err("WAL", e.to_string()))?;
         wal.write_all(&(bytes.len() as u32).to_le_bytes())
             .map_err(|e| storage_err("WAL", e.to_string()))?;
         let crc = crc32(&bytes);
-        wal.write_all(&bytes).map_err(|e| storage_err("WAL", e.to_string()))?;
+        wal.write_all(&bytes)
+            .map_err(|e| storage_err("WAL", e.to_string()))?;
         wal.write_all(&crc.to_le_bytes())
             .map_err(|e| storage_err("WAL", e.to_string()))?;
         if self.options.fsync_on_commit {
-            wal.sync_all().map_err(|e| storage_err("WAL", e.to_string()))?;
+            wal.sync_all()
+                .map_err(|e| storage_err("WAL", e.to_string()))?;
         }
         Ok(())
     }
@@ -357,7 +368,8 @@ impl Engine {
                 .map_err(|e| storage_err("IO", e.to_string()))?;
             f.write_all(&(bytes.len() as u64).to_le_bytes())
                 .map_err(|e| storage_err("IO", e.to_string()))?;
-            f.write_all(&bytes).map_err(|e| storage_err("IO", e.to_string()))?;
+            f.write_all(&bytes)
+                .map_err(|e| storage_err("IO", e.to_string()))?;
             f.sync_all().map_err(|e| storage_err("IO", e.to_string()))?;
         }
         std::fs::rename(&tmp, &dat_path)
@@ -401,7 +413,8 @@ impl Engine {
             .map_err(|e| storage_err("IO", e.to_string()))?;
         let len = u64::from_le_bytes(lenb) as usize;
         let mut bytes = vec![0u8; len];
-        f.read_exact(&mut bytes).map_err(|e| storage_err("IO", e.to_string()))?;
+        f.read_exact(&mut bytes)
+            .map_err(|e| storage_err("IO", e.to_string()))?;
         let snap: Snapshot = bincode_decode(&bytes)?;
         self.tables = snap.tables;
         self.data = snap.data;
@@ -431,7 +444,8 @@ impl Engine {
         let mut f = std::fs::File::open(&wal_path)
             .map_err(|e| storage_err("IO", format!("open WAL {}: {e}", wal_path.display())))?;
         let mut buf = Vec::new();
-        f.read_to_end(&mut buf).map_err(|e| storage_err("IO", e.to_string()))?;
+        f.read_to_end(&mut buf)
+            .map_err(|e| storage_err("IO", e.to_string()))?;
 
         let mut ops_to_apply: Vec<WalOp> = Vec::new();
         let mut off = 0usize;
@@ -468,7 +482,8 @@ impl Engine {
             .write(true)
             .open(&wal_path)
             .map_err(|e| storage_err("IO", e.to_string()))?;
-        f.set_len(off as u64).map_err(|e| storage_err("IO", e.to_string()))?;
+        f.set_len(off as u64)
+            .map_err(|e| storage_err("IO", e.to_string()))?;
         f.sync_all().map_err(|e| storage_err("IO", e.to_string()))?;
         Ok(())
     }
@@ -526,12 +541,18 @@ impl<'a> Tx<'a> {
                 let key = value_ser(v);
                 let committed = self.engine.data.get(table).map(|m| {
                     m.iter().any(|(k, r)| {
-                        *k != pk_str && r.get(&col.name).map(|cv| value_ser(cv) == key).unwrap_or(false)
+                        *k != pk_str
+                            && r.get(&col.name)
+                                .map(|cv| value_ser(cv) == key)
+                                .unwrap_or(false)
                     })
                 });
                 let staged = self.staged.get(table).map(|m| {
                     m.iter().any(|(k, r)| {
-                        *k != pk_str && r.get(&col.name).map(|cv| value_ser(cv) == key).unwrap_or(false)
+                        *k != pk_str
+                            && r.get(&col.name)
+                                .map(|cv| value_ser(cv) == key)
+                                .unwrap_or(false)
                     })
                 });
                 if committed.unwrap_or(false) || staged.unwrap_or(false) {
@@ -543,9 +564,7 @@ impl<'a> Tx<'a> {
             }
         }
 
-        self.engine.uniques
-            .entry(table.to_string())
-            .or_default();
+        self.engine.uniques.entry(table.to_string()).or_default();
         self.staged
             .entry(table.to_string())
             .or_default()
@@ -561,10 +580,7 @@ impl<'a> Tx<'a> {
     /// Delete a row by PK. No-op if absent.
     pub fn delete(&mut self, table: &str, pk: &str) -> Result<(), TubeforgeError> {
         self.engine.table(table)?;
-        self.staged
-            .entry(table.to_string())
-            .or_default()
-            .remove(pk);
+        self.staged.entry(table.to_string()).or_default().remove(pk);
         self.ops.push(WalOp {
             table: table.to_string(),
             pk: pk.to_string(),
@@ -648,7 +664,11 @@ fn crc32(data: &[u8]) -> u32 {
     for (i, t) in table.iter_mut().enumerate() {
         let mut c = i as u32;
         for _ in 0..8 {
-            c = if c & 1 != 0 { 0xEDB88320 ^ (c >> 1) } else { c >> 1 };
+            c = if c & 1 != 0 {
+                0xEDB88320 ^ (c >> 1)
+            } else {
+                c >> 1
+            };
         }
         *t = c;
     }
