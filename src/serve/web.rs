@@ -46,10 +46,8 @@ pub fn full(bytes: impl Into<hyper::body::Bytes>) -> Body {
 /// Erase any `http_body::Body` into the crate `Body` type.
 pub fn full_erase<B>(b: B) -> Body
 where
-    B: http_body::Body<
-            Data = hyper::body::Bytes,
-            Error = std::convert::Infallible,
-        > + Send
+    B: http_body::Body<Data = hyper::body::Bytes, Error = std::convert::Infallible>
+        + Send
         + Sync
         + 'static,
 {
@@ -159,9 +157,7 @@ pub struct ServeState {
 
 impl ServeState {
     pub fn new<T: Send + Sync + 'static>(t: T) -> Arc<ServeState> {
-        Arc::new(ServeState {
-            data: Box::new(t),
-        })
+        Arc::new(ServeState { data: Box::new(t) })
     }
 
     pub fn get<T: Send + Sync + 'static>(&self) -> Option<&T> {
@@ -256,8 +252,7 @@ impl Router {
 
     /// Register a route from a `get(handler)`/`post(handler)` method router.
     pub fn route<Args>(mut self, path: &str, m: MethodRouter<Args>) -> Self
-    where
-    {
+where {
         self.routes.push(Route {
             method: m.method,
             pattern: PathPattern::parse(path),
@@ -315,7 +310,10 @@ impl Router {
             if let Some(fb) = &self.fallback {
                 return fb(Arc::clone(&state), Vec::new(), query, uri, headers).await;
             }
-            return json_response(StatusCode::NOT_FOUND, serde_json::json!({"error": "not_found"}));
+            return json_response(
+                StatusCode::NOT_FOUND,
+                serde_json::json!({"error": "not_found"}),
+            );
         }
 
         // SPA / static fallback.
@@ -331,7 +329,10 @@ impl Router {
         }
 
         // No fallback: 404.
-        json_response(StatusCode::NOT_FOUND, serde_json::json!({"error": "not_found"}))
+        json_response(
+            StatusCode::NOT_FOUND,
+            serde_json::json!({"error": "not_found"}),
+        )
     }
 }
 
@@ -578,12 +579,7 @@ macro_rules! impl_handler {
     };
 }
 
-impl_handler!(
-    (),
-    (T0),
-    (T0, T1),
-    (T0, T1, T2),
-);
+impl_handler!((), (T0), (T0, T1), (T0, T1, T2),);
 
 // ---------------------------------------------------------------------------
 // Responses
@@ -656,7 +652,7 @@ impl IntoResponse for (StatusCode, Html) {
         HttpResponse::builder()
             .status(self.0)
             .header("content-type", "text/html; charset=utf-8")
-            .body(full(hyper::body::Bytes::from(self.1.0)))
+            .body(full(hyper::body::Bytes::from(self.1 .0)))
             .expect("status+html response")
     }
 }
@@ -831,7 +827,10 @@ mod tests {
         format!("hello {who} x={extra}").into_response()
     }
     async fn header_test(Headers(h): Headers) -> Response {
-        let ct = h.get("x-custom").and_then(|v| v.to_str().ok()).unwrap_or("none");
+        let ct = h
+            .get("x-custom")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("none");
         format!("header={ct}").into_response()
     }
 
@@ -861,7 +860,10 @@ mod tests {
     async fn routes_state_and_path_and_query() {
         let router = make_router();
         assert_eq!(call(&router, Method::GET, "/").await, "n=42");
-        assert_eq!(call(&router, Method::GET, "/hello/world?x=7").await, "hello world x=7");
+        assert_eq!(
+            call(&router, Method::GET, "/hello/world?x=7").await,
+            "hello world x=7"
+        );
     }
 
     #[tokio::test]
@@ -869,13 +871,17 @@ mod tests {
         let router = make_router();
         assert_eq!(call(&router, Method::POST, "/head").await, "header=abc");
         // GET on a POST-only route → 404 (no match).
-        assert!(call(&router, Method::GET, "/head").await.contains("not_found"));
+        assert!(call(&router, Method::GET, "/head")
+            .await
+            .contains("not_found"));
     }
 
     #[tokio::test]
     async fn path_pattern_requires_full_match() {
         let router = make_router();
-        assert!(call(&router, Method::GET, "/hello/world/extra").await.contains("not_found"));
+        assert!(call(&router, Method::GET, "/hello/world/extra")
+            .await
+            .contains("not_found"));
     }
 }
 
@@ -899,14 +905,20 @@ mod route_tests {
             .body(full(hyper::body::Bytes::new()))
             .expect("req");
         let resp = router.serve(req, state).await;
-        let body = http_body_util::BodyExt::collect(resp.into_body()).await.unwrap().to_bytes();
-        assert_eq!(String::from_utf8_lossy(&body), "legacy-page", "route matched");
+        let body = http_body_util::BodyExt::collect(resp.into_body())
+            .await
+            .unwrap()
+            .to_bytes();
+        assert_eq!(
+            String::from_utf8_lossy(&body),
+            "legacy-page",
+            "route matched"
+        );
     }
 
     #[tokio::test]
     async fn multi_segment_post_matches() {
-        let router = Router::new()
-            .route("/legacy/ideas/{id}/{status}", post(legacy_page));
+        let router = Router::new().route("/legacy/ideas/{id}/{status}", post(legacy_page));
         let state = ServeState::new(());
         let req = Request::builder()
             .method(Method::POST)
@@ -914,7 +926,14 @@ mod route_tests {
             .body(full(hyper::body::Bytes::new()))
             .expect("req");
         let resp = router.serve(req, state).await;
-        let body = http_body_util::BodyExt::collect(resp.into_body()).await.unwrap().to_bytes();
-        assert_eq!(String::from_utf8_lossy(&body), "legacy-page", "post matched");
+        let body = http_body_util::BodyExt::collect(resp.into_body())
+            .await
+            .unwrap()
+            .to_bytes();
+        assert_eq!(
+            String::from_utf8_lossy(&body),
+            "legacy-page",
+            "post matched"
+        );
     }
 }

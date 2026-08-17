@@ -18,7 +18,8 @@ use tokio::sync::Mutex;
 use crate::error::{storage_err, TubeforgeError};
 
 /// A tungstenite WebSocket stream over an upgraded Hyper connection.
-pub type WebSocket = tokio_tungstenite::WebSocketStream<hyper_util::rt::TokioIo<hyper::upgrade::Upgraded>>;
+pub type WebSocket =
+    tokio_tungstenite::WebSocketStream<hyper_util::rt::TokioIo<hyper::upgrade::Upgraded>>;
 
 /// Split a socket into its write and read halves.
 pub fn split(
@@ -45,14 +46,21 @@ where
     // Validate the upgrade headers.
     let headers = req.headers();
     let connection = headers.get(http::header::CONNECTION)?.to_str().ok()?;
-    if !connection.split(',').any(|s| s.trim().eq_ignore_ascii_case("upgrade")) {
+    if !connection
+        .split(',')
+        .any(|s| s.trim().eq_ignore_ascii_case("upgrade"))
+    {
         return None;
     }
     let upgrade = headers.get(http::header::UPGRADE)?.to_str().ok()?;
     if !upgrade.eq_ignore_ascii_case("websocket") {
         return None;
     }
-    let key = headers.get(http::header::SEC_WEBSOCKET_KEY)?.to_str().ok()?.to_string();
+    let key = headers
+        .get(http::header::SEC_WEBSOCKET_KEY)?
+        .to_str()
+        .ok()?
+        .to_string();
 
     let resp = HttpResponse::builder()
         .status(StatusCode::SWITCHING_PROTOCOLS)
@@ -124,8 +132,7 @@ pub async fn send(
     sender: &Arc<Mutex<futures::stream::SplitSink<WebSocket, Message>>>,
     res: &serde_json::Value,
 ) -> Result<(), TubeforgeError> {
-    let json = serde_json::to_string(res)
-        .map_err(|e| storage_err("ENCODE", e.to_string()))?;
+    let json = serde_json::to_string(res).map_err(|e| storage_err("ENCODE", e.to_string()))?;
     sender
         .lock()
         .await

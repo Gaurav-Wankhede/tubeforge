@@ -57,7 +57,9 @@ pub struct Schema;
 impl Schema {
     pub fn get_field(&self, name: &str) -> Result<super::store::FieldName, TubeforgeError> {
         field_from_name(name).ok_or_else(|| {
-            index_err(format!("unknown field {name:?} (expected title/description/tags)"))
+            index_err(format!(
+                "unknown field {name:?} (expected title/description/tags)"
+            ))
         })
     }
 }
@@ -94,7 +96,10 @@ impl Index {
     }
 
     pub fn num_docs(&self) -> u64 {
-        self.store.read().unwrap_or_else(|p| p.into_inner()).num_docs()
+        self.store
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .num_docs()
     }
 }
 
@@ -133,7 +138,11 @@ impl IndexWriter {
 
 /// Add (or replace) the doc for `video_id` and persist. Kept for callers that
 /// want a one-shot upsert without managing a writer (mirrors old `upsert`).
-pub fn upsert(writer: &mut IndexWriter, _fields: &Schema, doc: &VideoDoc) -> Result<(), TubeforgeError> {
+pub fn upsert(
+    writer: &mut IndexWriter,
+    _fields: &Schema,
+    doc: &VideoDoc,
+) -> Result<(), TubeforgeError> {
     writer.add_document(doc.clone())
 }
 
@@ -166,11 +175,12 @@ pub fn open_or_create(dir: &Path) -> Result<Index, TubeforgeError> {
 /// Full rebuild from the `videos` table contents: write a fresh snapshot from
 /// `docs`. Idempotent (LLD §3.2 recovery path). Returns the doc count.
 pub fn rebuild(dir: &Path, docs: &[VideoDoc]) -> Result<usize, TubeforgeError> {
-    std::fs::create_dir_all(dir).map_err(|e| index_err(format!(
-        "create index dir {}: {e}",
-        dir.display()
-    )))?;
-    let store = super::store::write_store(dir, &docs.iter().map(VideoDoc::to_indexed).collect::<Vec<_>>())?;
+    std::fs::create_dir_all(dir)
+        .map_err(|e| index_err(format!("create index dir {}: {e}", dir.display())))?;
+    let store = super::store::write_store(
+        dir,
+        &docs.iter().map(VideoDoc::to_indexed).collect::<Vec<_>>(),
+    )?;
     let n = store.num_docs();
     std::fs::remove_file(dir.join("meta.json")).ok();
     Ok(n as usize)

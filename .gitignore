@@ -5,7 +5,7 @@ backups/
 
 # Local tool databases / stray artifacts
 webfind.db
-<longcat_arg_value>*
+pagerank_cache.json
 
 # Frontend build output (belt-and-suspenders; frontend/.gitignore also covers)
 frontend/node_modules

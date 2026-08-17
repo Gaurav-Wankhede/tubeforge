@@ -37,7 +37,10 @@ async fn gate_crud_wal_transaction() {
 
     // Commit a write.
     db.meta_set("commit", "yes").await.expect("meta_set");
-    assert_eq!(db.meta_get("commit").await.unwrap(), Some("yes".to_string()));
+    assert_eq!(
+        db.meta_get("commit").await.unwrap(),
+        Some("yes".to_string())
+    );
 
     // Roll a transaction back; its write must be absent afterwards.
     {
@@ -63,8 +66,14 @@ async fn gate_crud_wal_transaction() {
     // stays absent.
     drop(db);
     let db2 = Db::open(&db_path).await.expect("reopen");
-    assert_eq!(db2.meta_get("commit").await.unwrap(), Some("yes".to_string()));
-    assert_eq!(db2.meta_get("commit2").await.unwrap(), Some("y".to_string()));
+    assert_eq!(
+        db2.meta_get("commit").await.unwrap(),
+        Some("yes".to_string())
+    );
+    assert_eq!(
+        db2.meta_get("commit2").await.unwrap(),
+        Some("y".to_string())
+    );
     assert_eq!(
         db2.meta_get("doomed").await.unwrap(),
         None,

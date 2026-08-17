@@ -272,8 +272,11 @@ fn agent_contract_stdio_rpc() {
         .expect("spawn tubeforge rpc");
 
     let mut stdin = child.stdin.take().expect("stdin");
-    writeln!(stdin, r#"{{"id":"r1","method":"health.get","params":{{}}}}"#)
-        .expect("write request");
+    writeln!(
+        stdin,
+        r#"{{"id":"r1","method":"health.get","params":{{}}}}"#
+    )
+    .expect("write request");
     writeln!(
         stdin,
         r#"{{"id":"r2","method":"nonexistent.method","params":{{}}}}"#
@@ -297,12 +300,14 @@ fn agent_contract_stdio_rpc() {
     // Find the result for r1 and the error for r2.
     let r1: Vec<&Value> = lines.iter().filter(|v| v["id"] == "r1").collect();
     assert!(
-        r1.iter().any(|v| v["type"] == "result" && v["data"].is_object()),
+        r1.iter()
+            .any(|v| v["type"] == "result" && v["data"].is_object()),
         "health.get streams a result object for r1"
     );
     let r2: Vec<&Value> = lines.iter().filter(|v| v["id"] == "r2").collect();
     assert!(
-        r2.iter().any(|v| v["type"] == "error" && v["error"]["code"] == -32603),
+        r2.iter()
+            .any(|v| v["type"] == "error" && v["error"]["code"] == -32603),
         "unknown method returns -32603 for r2"
     );
     // No random output to stdout: every line must be an RPC envelope.

@@ -11,8 +11,8 @@
 //!   GET /api/analysis/keywords       — chart-ready keyword opportunity (top 25)
 //!   GET /api/analysis/tags           — tag gaps (competitor tags we don't use)
 
-use http::StatusCode;
 use crate::serve::web::{get, Json, Query, Router, State};
+use http::StatusCode;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
@@ -214,9 +214,7 @@ fn own_or_err(st: &AppState) -> Result<String, (StatusCode, Json)> {
 }
 
 /// GET /api/analysis/overview — own channel analysis (charts + insights).
-async fn overview_api(
-    State(st): State<AppState>,
-) -> Result<Json, (StatusCode, Json)> {
+async fn overview_api(State(st): State<AppState>) -> Result<Json, (StatusCode, Json)> {
     let own = own_or_err(&st)?;
     let overview = crate::analytics::growth::own_overview(&st.db, &own)
         .await
@@ -230,9 +228,7 @@ async fn overview_api(
 }
 
 /// GET /api/analysis/next-video — the best "make this next" recommendation.
-async fn next_video_api(
-    State(st): State<AppState>,
-) -> Result<Json, (StatusCode, Json)> {
+async fn next_video_api(State(st): State<AppState>) -> Result<Json, (StatusCode, Json)> {
     let rec =
         crate::analytics::growth::next_video_recommendation(&st.db, 7.0, st.own_channel.as_deref())
             .await
@@ -258,9 +254,7 @@ async fn keywords_api(
 }
 
 /// GET /api/analysis/tags — tag-gap intelligence for the own channel.
-async fn tags_api(
-    State(st): State<AppState>,
-) -> Result<Json, (StatusCode, Json)> {
+async fn tags_api(State(st): State<AppState>) -> Result<Json, (StatusCode, Json)> {
     let own = own_or_err(&st)?;
     let overview = crate::analytics::growth::own_overview(&st.db, &own)
         .await

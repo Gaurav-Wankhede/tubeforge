@@ -17,7 +17,6 @@ use futures::Stream;
 use http::{Response as HttpResponse, StatusCode};
 use http_body::{Body as HttpBody, Frame, SizeHint};
 
-
 /// A single SSE event.
 #[derive(Default)]
 pub struct Event {

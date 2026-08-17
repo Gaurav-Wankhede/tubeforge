@@ -761,6 +761,3 @@ async fn kg_pagerank_centrality_populates_channels() {
         "pagerank mass must sum to 1.0, got {sum}"
     );
 }
-
-
-

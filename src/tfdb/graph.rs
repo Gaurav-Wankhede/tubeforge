@@ -74,7 +74,13 @@ impl Graph {
         self.upsert_edge_inner(from, to, ty, weight)
     }
 
-    fn upsert_edge_inner(&mut self, from: String, to: String, ty: String, weight: f64) -> Option<f64> {
+    fn upsert_edge_inner(
+        &mut self,
+        from: String,
+        to: String,
+        ty: String,
+        weight: f64,
+    ) -> Option<f64> {
         for e in &mut self.edges {
             if e.from == from && e.to == to && e.ty == ty {
                 let old = e.weight;
@@ -146,8 +152,7 @@ impl Graph {
         let mut pr: HashMap<String, f64> =
             self.nodes.iter().map(|id| (id.clone(), 1.0 / n)).collect();
         let out = self.adjacency();
-        let out_degree: HashMap<&String, usize> =
-            out.iter().map(|(k, v)| (k, v.len())).collect();
+        let out_degree: HashMap<&String, usize> = out.iter().map(|(k, v)| (k, v.len())).collect();
 
         for _ in 0..iterations {
             let base = (1.0 - damping) / n;
@@ -180,7 +185,8 @@ impl Graph {
 
     /// Connected components (undirected, union-find over all edges).
     pub fn components(&self) -> Vec<Vec<String>> {
-        let mut parent: HashMap<String, String> = self.nodes.iter().map(|n| (n.clone(), n.clone())).collect();
+        let mut parent: HashMap<String, String> =
+            self.nodes.iter().map(|n| (n.clone(), n.clone())).collect();
         fn find(parent: &mut HashMap<String, String>, x: &str) -> String {
             let p = parent.get(x).cloned().unwrap_or_else(|| x.to_string());
             if p != x {

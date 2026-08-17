@@ -88,7 +88,8 @@ impl Hnsw {
                 .collect();
             neigh.sort_by(|a, b| a.0.total_cmp(&b.0));
             neigh.truncate(self.max_links);
-            self.graph.insert(id.clone(), neigh.into_iter().map(|(_, o)| o).collect());
+            self.graph
+                .insert(id.clone(), neigh.into_iter().map(|(_, o)| o).collect());
         }
         // Entry points: a few nodes with highest degree (hubs) — for empty
         // graph this stays empty and `nearest` falls back to brute force.

@@ -17,7 +17,12 @@ use super::store::{Engine, Row, Value};
 use crate::error::{storage_err, TubeforgeError};
 
 /// Sum a numeric column across rows matching a filter (empty filter = all).
-pub fn sum(engine: &Engine, table: &str, col: &str, filter: Option<(&str, &Value)>) -> Result<f64, TubeforgeError> {
+pub fn sum(
+    engine: &Engine,
+    table: &str,
+    col: &str,
+    filter: Option<(&str, &Value)>,
+) -> Result<f64, TubeforgeError> {
     Ok(rows(engine, table, filter)?
         .iter()
         .filter_map(|r| r.get(col).and_then(|v| v.as_f64()))
@@ -25,7 +30,12 @@ pub fn sum(engine: &Engine, table: &str, col: &str, filter: Option<(&str, &Value
 }
 
 /// Average a numeric column across matching rows (0.0 when none match).
-pub fn avg(engine: &Engine, table: &str, col: &str, filter: Option<(&str, &Value)>) -> Result<f64, TubeforgeError> {
+pub fn avg(
+    engine: &Engine,
+    table: &str,
+    col: &str,
+    filter: Option<(&str, &Value)>,
+) -> Result<f64, TubeforgeError> {
     let vals: Vec<f64> = rows(engine, table, filter)?
         .iter()
         .filter_map(|r| r.get(col).and_then(|v| v.as_f64()))
@@ -37,7 +47,12 @@ pub fn avg(engine: &Engine, table: &str, col: &str, filter: Option<(&str, &Value
 }
 
 /// Min of a numeric column across matching rows (None when none match).
-pub fn min(engine: &Engine, table: &str, col: &str, filter: Option<(&str, &Value)>) -> Result<Option<f64>, TubeforgeError> {
+pub fn min(
+    engine: &Engine,
+    table: &str,
+    col: &str,
+    filter: Option<(&str, &Value)>,
+) -> Result<Option<f64>, TubeforgeError> {
     Ok(rows(engine, table, filter)?
         .iter()
         .filter_map(|r| r.get(col).and_then(|v| v.as_f64()))
@@ -45,7 +60,12 @@ pub fn min(engine: &Engine, table: &str, col: &str, filter: Option<(&str, &Value
 }
 
 /// Max of a numeric column across matching rows (None when none match).
-pub fn max(engine: &Engine, table: &str, col: &str, filter: Option<(&str, &Value)>) -> Result<Option<f64>, TubeforgeError> {
+pub fn max(
+    engine: &Engine,
+    table: &str,
+    col: &str,
+    filter: Option<(&str, &Value)>,
+) -> Result<Option<f64>, TubeforgeError> {
     Ok(rows(engine, table, filter)?
         .iter()
         .filter_map(|r| r.get(col).and_then(|v| v.as_f64()))
@@ -53,12 +73,20 @@ pub fn max(engine: &Engine, table: &str, col: &str, filter: Option<(&str, &Value
 }
 
 /// Count of matching rows.
-pub fn count(engine: &Engine, table: &str, filter: Option<(&str, &Value)>) -> Result<u64, TubeforgeError> {
+pub fn count(
+    engine: &Engine,
+    table: &str,
+    filter: Option<(&str, &Value)>,
+) -> Result<u64, TubeforgeError> {
     Ok(rows(engine, table, filter)?.len() as u64)
 }
 
 /// `GROUP BY col` → count of rows per distinct value.
-pub fn group_counts(engine: &Engine, table: &str, col: &str) -> Result<Vec<(String, u64)>, TubeforgeError> {
+pub fn group_counts(
+    engine: &Engine,
+    table: &str,
+    col: &str,
+) -> Result<Vec<(String, u64)>, TubeforgeError> {
     let mut m: HashMap<String, u64> = HashMap::new();
     for r in engine.all(table)? {
         if let Some(Value::Text(v)) = r.get(col) {
@@ -101,7 +129,11 @@ pub fn join(
 }
 
 /// Fetch rows (optionally filtered by one column equality).
-fn rows(engine: &Engine, table: &str, filter: Option<(&str, &Value)>) -> Result<Vec<Row>, TubeforgeError> {
+fn rows(
+    engine: &Engine,
+    table: &str,
+    filter: Option<(&str, &Value)>,
+) -> Result<Vec<Row>, TubeforgeError> {
     match filter {
         Some((col, val)) => engine.find_eq(table, col, val),
         None => engine.all(table),
@@ -139,22 +171,61 @@ mod tests {
     fn open() -> (tempfile::TempDir, Engine) {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut e = Engine::open(&dir.path().join("t.db")).expect("open");
-        e.create_table(crate::tfdb::TableSchema::new("videos", "video_id").text("channel_id").int("view_count"));
+        e.create_table(
+            crate::tfdb::TableSchema::new("videos", "video_id")
+                .text("channel_id")
+                .int("view_count"),
+        );
         e.create_table(crate::tfdb::TableSchema::new("channels", "channel_id").text("title"));
         (dir, e)
     }
 
     fn r(pairs: &[(&str, Value)]) -> BTreeMap<String, Value> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
     }
 
     fn seed(e: &mut Engine) {
         let mut tx = e.begin();
-        tx.put("videos", r(&[("video_id", "v1".into()), ("channel_id", "c1".into()), ("view_count", Value::Int(100))])).unwrap();
-        tx.put("videos", r(&[("video_id", "v2".into()), ("channel_id", "c1".into()), ("view_count", Value::Int(300))])).unwrap();
-        tx.put("videos", r(&[("video_id", "v3".into()), ("channel_id", "c2".into()), ("view_count", Value::Int(50))])).unwrap();
-        tx.put("channels", r(&[("channel_id", "c1".into()), ("title", "Alpha".into())])).unwrap();
-        tx.put("channels", r(&[("channel_id", "c2".into()), ("title", "Beta".into())])).unwrap();
+        tx.put(
+            "videos",
+            r(&[
+                ("video_id", "v1".into()),
+                ("channel_id", "c1".into()),
+                ("view_count", Value::Int(100)),
+            ]),
+        )
+        .unwrap();
+        tx.put(
+            "videos",
+            r(&[
+                ("video_id", "v2".into()),
+                ("channel_id", "c1".into()),
+                ("view_count", Value::Int(300)),
+            ]),
+        )
+        .unwrap();
+        tx.put(
+            "videos",
+            r(&[
+                ("video_id", "v3".into()),
+                ("channel_id", "c2".into()),
+                ("view_count", Value::Int(50)),
+            ]),
+        )
+        .unwrap();
+        tx.put(
+            "channels",
+            r(&[("channel_id", "c1".into()), ("title", "Alpha".into())]),
+        )
+        .unwrap();
+        tx.put(
+            "channels",
+            r(&[("channel_id", "c2".into()), ("title", "Beta".into())]),
+        )
+        .unwrap();
         tx.commit().unwrap();
     }
 
