@@ -231,6 +231,15 @@ AI agents communicate directly over standard input/output using line-delimited J
 <- {"id": "req-1", "type": "result", "data": {"seo_score": 8.7, "geo_score": 8.2, "passed": true}}
 ```
 
+### 4. Full-Stack Application Server (`tubeforge serve`)
+`tubeforge serve` launches a comprehensive, standalone full-stack server powering both browser frontends and headless backend consumers:
+
+- **Embedded Database & Graph Engine**: Manages `tfdb` connection state, coordinates transactional writes, and lazy-loads the in-memory Knowledge Graph (`kg`) for instant community detection and PageRank queries.
+- **Comprehensive REST API Layer (`/api/*`)**: Exposes over 20+ specialized JSON endpoints (`/api/scores`, `/api/ideas/analyze`, `/api/keywords/inspect`, `/api/gaps/outliers`, `/api/scorecard`, `/api/transcripts`, `/api/tags/gaps`) for complete programmatic control.
+- **Real-Time Server-Sent Events (`/events`)**: Streams live push notifications for database insertions, health counters, and system alerts with automated keep-alive heartbeats.
+- **Duplex WebSocket JSON-RPC (`/ws`)**: High-throughput bidirectional socket channel sharing the unified RPC method surface with the CLI.
+- **Zero-Dependency Static Host**: Directly serves the optimized React SPA (from `frontend/dist`) or fallback server-rendered HTMX pages with inline SVGs, requiring no Node.js runtime, npm, or external CDNs in production.
+
 ---
 
 ## Configuration Reference
