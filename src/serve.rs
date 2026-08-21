@@ -191,6 +191,45 @@ pub async fn kg_status(st: &AppState) -> KgStatus {
     }
 }
 
+/// Locate the frontend SPA distribution directory, searching:
+/// 1. User data directory (`<data_dir>/frontend/dist` or `<data_dir>/dist`)
+/// 2. Executable parent directory (`<exe_dir>/frontend/dist` or `<exe_dir>/dist`)
+/// 3. Current working directory (`frontend/dist`)
+/// 4. Compile-time manifest directory (`CARGO_MANIFEST_DIR/frontend/dist`)
+fn find_spa_dist(data_dir: &std::path::Path) -> Option<PathBuf> {
+    let in_data = data_dir.join("frontend/dist");
+    if in_data.exists() && in_data.join("index.html").exists() {
+        return Some(in_data);
+    }
+    let in_data_dist = data_dir.join("dist");
+    if in_data_dist.exists() && in_data_dist.join("index.html").exists() {
+        return Some(in_data_dist);
+    }
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let in_exe_frontend = exe_dir.join("frontend/dist");
+            if in_exe_frontend.exists() && in_exe_frontend.join("index.html").exists() {
+                return Some(in_exe_frontend);
+            }
+            let in_exe_dist = exe_dir.join("dist");
+            if in_exe_dist.exists() && in_exe_dist.join("index.html").exists() {
+                return Some(in_exe_dist);
+            }
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        let in_cwd = cwd.join("frontend/dist");
+        if in_cwd.exists() && in_cwd.join("index.html").exists() {
+            return Some(in_cwd);
+        }
+    }
+    let in_manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("frontend/dist");
+    if in_manifest.exists() && in_manifest.join("index.html").exists() {
+        return Some(in_manifest);
+    }
+    None
+}
+
 /// Build the dashboard router plus the shared `ServeState` that carries the
 /// `AppState` into handlers.
 ///
@@ -200,8 +239,8 @@ pub async fn kg_status(st: &AppState) -> KgStatus {
 ///   the legacy HTMX pages move under `/legacy/*`.
 /// - Without a SPA build, the HTMX pages keep the root routes (original behavior).
 pub fn app(state: AppState) -> (Router, Arc<ServeState>) {
-    let spa_dist = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("frontend/dist");
-    let spa_enabled = spa_dist.exists();
+    let spa_dist_opt = find_spa_dist(&state.data_dir);
+    let spa_enabled = spa_dist_opt.is_some();
 
     let mut router = Router::new()
         .merge(api::api_routes())
@@ -211,7 +250,7 @@ pub fn app(state: AppState) -> (Router, Arc<ServeState>) {
         .route("/static/htmx.min.js", get(htmx_js))
         .route("/static/sse.js", get(sse_js));
 
-    if spa_enabled {
+    if let Some(spa_dist) = spa_dist_opt {
         router = router
             .route("/legacy", get(home))
             .route("/legacy/scores", get(scores_page))
