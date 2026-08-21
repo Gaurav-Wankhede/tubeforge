@@ -58,10 +58,80 @@ cd tubeforge
 
 # Build release binary
 cargo build --release
-
-# Optional: Add to user path
-ln -s "$(pwd)/target/release/tubeforge" /usr/local/bin/tubeforge
 ```
+
+---
+
+## Cross-Platform Compatibility & Installation
+
+TubeForge is engineered and verified for cross-platform operation across **macOS**, **Linux**, and **Windows**. The storage engine (`tfdb`), BM25 scoring pipeline, and web interfaces contain zero platform-locked dependencies.
+
+### macOS (Apple Silicon & Intel)
+
+- **Target Architectures**: `aarch64-apple-darwin` (Apple Silicon M1/M2/M3/M4) and `x86_64-apple-darwin` (Intel).
+- **Prerequisites**: Xcode Command Line Tools (`xcode-select --install`).
+- **Path Installation**:
+  ```sh
+  # Add release binary to user path
+  cp target/release/tubeforge /usr/local/bin/
+  # or for Apple Silicon Homebrew path:
+  cp target/release/tubeforge /opt/homebrew/bin/
+  ```
+- **Data Location**: Defaults to `~/.tubeforge` (resolved via `$HOME`).
+
+### Linux (Ubuntu, Debian, Fedora, Arch Linux)
+
+- **Target Architectures**: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, and `x86_64-unknown-linux-musl` (fully static).
+- **Prerequisites**: Standard build essentials and OpenSSL (or native TLS):
+  ```sh
+  # Debian / Ubuntu
+  sudo apt-get update && sudo apt-get install -y build-essential pkg-config libssl-dev
+
+  # Fedora / RHEL
+  sudo dnf install -y gcc pkg-config openssl-devel
+
+  # Arch Linux
+  sudo pacman -S base-devel openssl
+  ```
+- **Path Installation**:
+  ```sh
+  sudo cp target/release/tubeforge /usr/local/bin/
+  ```
+- **Data Location**: Defaults to `~/.tubeforge` (or `$XDG_DATA_HOME/tubeforge` if configured).
+- **Headless Environments**: For thumbnail generation on headless servers, ensure Chromium is accessible or allow the automated fetcher to download a local sandbox build.
+
+### Windows (Windows 10, 11 & Windows Server)
+
+- **Target Architectures**: `x86_64-pc-windows-msvc` (Native) and `x86_64-pc-windows-gnu`.
+- **Prerequisites**: Visual Studio C++ Build Tools or MSVC toolchain (`rustup default stable-x86_64-pc-windows-msvc`).
+- **PowerShell Setup & Execution**:
+  ```powershell
+  # Build native Windows executable
+  cargo build --release
+
+  # Add to User PATH or copy to a directory in PATH
+  Copy-Item .\target\release\tubeforge.exe "$HOME\.cargo\bin\"
+
+  # Initialize TubeForge
+  tubeforge.exe init
+
+  # Ingest channels via PowerShell
+  tubeforge.exe ingest channels UC_x5XG1OV2P6uZZ5FSM9Ttw
+
+  # Score draft titles
+  tubeforge.exe score --draft-title "Rust Memory Management: How Ownership Actually Works"
+
+  # Start dashboard
+  tubeforge.exe serve
+  ```
+- **Data Location**: Defaults to `%USERPROFILE%\.tubeforge` (e.g., `C:\Users\<User>\.tubeforge`).
+- **Windows Subsystem for Linux (WSL2)**: TubeForge runs natively inside Ubuntu/Debian on WSL2 with full feature parity.
+
+### Platform Architecture & Portability Invariants
+
+- **Storage Portability**: `tfdb` `.wal` and `.dat` binary files are structured with fixed-width, little-endian encodings and CRC32 checksums, allowing database files to be seamlessly moved across macOS, Linux, and Windows without conversion.
+- **Path Normalization**: Internal storage, indexers, and export routines utilize Rust's standard `PathBuf` abstractions, preventing forward/backward slash corruption across operating systems.
+- **Loopback Socket Safety**: The dashboard binds `127.0.0.1` / `::1` uniformly across Unix sockets and Windows Winsock.
 
 ### Initial Setup & Workflow
 
