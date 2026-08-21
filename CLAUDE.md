@@ -78,3 +78,15 @@ fn pagerank_mass_is_conserved(
     prop_assert!((sum - 1.0).abs() < 1e-9 || pr.is_empty());
 }
 ```
+
+---
+
+## Strategic Frameworks & Founder Playbook Integration
+
+TubeForge is paired with the **Founder Playbook** skills (`~/.agents/skills/` and `~/.config/opencode/skills/`) to drive its product strategy, algorithm design, and developer distribution:
+
+- **`obviously-awesome` & `blue-ocean-strategy`** — **Product Identity**: Position TubeForge as a *Local-First, Agent-Native YouTube Intelligence Engine* eliminating SaaS lock-in and cloud scraping fees.
+- **`made-to-stick` & `storybrand`** — **Scoring & Prompt Engine**: The AI bridge (`tubeforge prompt`) and title scoring (`src/scoring/`) embed SUCCESs (Simple, Unexpected, Concrete, Credible, Emotional, Stories) and SB7 frameworks.
+- **`mom-test` & `lean-startup`** — **Engineering Discipline**: Validate real CLI developer friction before building speculative features (strict YAGNI).
+- **`traction` & `100m-leads`** — **Open-Source Distribution**: Bullseye channel testing across GitHub SEO, Rust developer forums (`r/rust`), and AI coding harnesses (OpenCode, Claude Code).
+- **`diagnose`** — **Meta-Triage**: Triage whether growth friction is an adoption issue (`obviously-awesome`), onboarding friction (`mom-test`), or distribution reach (`traction`).
