@@ -42,3 +42,10 @@ Then report: **both PIDs** + health status of each.
 - First request to the backend after start has ~9s DB cold-start latency; subsequent are instant. Don't mistake this for a hang.
 - `serve` binds loopback only (single-user). The DB is single-writer — do not run writing CLI commands concurrently.
 - To stop: kill the backend PID and the Vite PID.
+
+## Strategic Skills & Founder Playbook Integration
+Agents working on TubeForge should load and adhere to the **Founder Playbook** skills:
+- **`obviously-awesome` & `blue-ocean-strategy`**: Drive local-first positioning vs cloud SaaS.
+- **`made-to-stick` & `storybrand`**: Guide title scoring, psych algorithms (`src/scoring/psych.rs`), and AI prompt bundles (`src/commands/prompt.rs`).
+- **`mom-test` & `lean-startup`**: Ensure no unvalidated features or premature abstraction are introduced (YAGNI).
+- **`traction`**: Direct open-source distribution and community channel testing.

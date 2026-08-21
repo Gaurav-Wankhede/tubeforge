@@ -67,11 +67,11 @@ Provide a structured analysis with these exact sections:
    - Target audience skill level (beginner / intermediate / advanced)
    - Main viewer problem or desire this video tries to solve
 
-2. Content Structure Breakdown
-   - Hook used in the first 30–60 seconds
+2. Content Structure & Hook Breakdown (Made to Stick / SUCCESs Framework)
+   - Hook used in the first 0–60 seconds: Unexpectedness, Concrete anchor, Emotional curiosity gap
    - Main sections / chapters (with approximate timing if possible)
    - How value is delivered (theory, code examples, visuals, storytelling, etc.)
-   - Closing / CTA style
+   - Closing / CTA style & Gap-Fulfillment redirection
 
 3. Strengths
    - What this video does particularly well
@@ -88,13 +88,13 @@ Provide a structured analysis with these exact sections:
    - List specific questions a viewer is likely to still have after watching
    - Phrase them as natural viewer questions
 
-6. Content Gap Opportunities
-   - 5–8 specific video ideas that fill gaps left by this video
+6. Content Gap Opportunities (Obviously Awesome / Blue Ocean Positioning)
+   - 5–8 specific video ideas that fill gaps left by this video, positioned to make the competitor's version look incomplete
    - For each idea include: Title suggestion + Why it fills a gap + Recommended format (long-form / Shorts / series)
 
-7. Packaging Insights
-   - Potential stronger title angles
-   - Thumbnail concept ideas that could outperform the original
+7. Packaging & Title Insights (Made to Stick & Cialdini Influence)
+   - High-CTR title suggestions engineered with concrete curiosity gaps and authority cues
+   - Thumbnail concept ideas that visually anchor the core problem
 
 Be specific, practical, and focused on actionable opportunities for a channel that explains concepts clearly with visual motion graphics and real-world problem solving.
 "#);
@@ -106,7 +106,7 @@ fn multi_template(videos: &[(VideoRow, TranscriptRow)]) -> String {
     let mut out = String::new();
     out.push_str("You are a senior YouTube strategy analyst. I will give you transcripts from multiple competitor videos in the same niche.\n\n");
     out.push_str(
-        "Your job is to find patterns, repeated themes, and most importantly — content gaps.\n\n",
+        "Your job is to find patterns, repeated themes, and most importantly — content gaps using the Founder Playbook frameworks (Made to Stick, StoryBrand, Obviously Awesome, Blue Ocean Strategy).\n\n",
     );
     out.push_str("Transcripts:\n\"\"\"\n");
     for (v, t) in videos {
@@ -125,14 +125,14 @@ Analyze across all videos and output:
    - Topics that appear only once
    - Topics that are mentioned briefly but never deeply covered
 
-2. Structural Patterns
-   - Common ways these creators structure explanations
-   - Common weaknesses in how they teach
+2. Structural & Explanatory Patterns (StoryBrand & SUCCESs Lenses)
+   - Common ways these creators structure explanations (Viewer as Hero vs Passive Listener)
+   - Common weaknesses in how they teach (abstract jargon vs concrete visual analogies)
 
 3. High-Frequency Unanswered Questions
    - Questions that surface (explicitly or implicitly) across multiple transcripts
 
-4. Clear Content Gaps (Prioritized)
+4. Clear Content Gaps (Blue Ocean & Category Positioning)
    Rank the strongest opportunities:
    - Gap description
    - Evidence from the transcripts
@@ -140,7 +140,7 @@ Analyze across all videos and output:
    - Suggested video angle + format
    - Estimated difficulty to produce a superior version
 
-5. Series / Playlist Opportunities
+5. Series & Multi-Video Pillar Opportunities (Traction & Content Sequencing)
    - Topics that naturally form a multi-video series that no competitor has fully owned
 
 Focus only on high-signal, practical gaps suitable for an educational technical channel.
