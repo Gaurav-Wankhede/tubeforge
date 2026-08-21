@@ -240,7 +240,6 @@ fn find_spa_dist(data_dir: &std::path::Path) -> Option<PathBuf> {
 /// - Without a SPA build, the HTMX pages keep the root routes (original behavior).
 pub fn app(state: AppState) -> (Router, Arc<ServeState>) {
     let spa_dist_opt = find_spa_dist(&state.data_dir);
-    let spa_enabled = spa_dist_opt.is_some();
 
     let mut router = Router::new()
         .merge(api::api_routes())
