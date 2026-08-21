@@ -7,7 +7,7 @@ rust-version = "1.85"
 description = "Local-first YouTube SEO/GEO growth engine — RSS/oEmbed/API ingest, BM25 scoring, analytics, thumbnail generation. CLI-first, agent-ready."
 keywords = ["youtube", "seo", "analytics", "cli", "search"]
 categories = ["command-line-utilities", "multimedia"]
-repository = "https://github.com/<owner>/tubeforge"
+repository = "https://github.com/Gaurav-Wankhede/tubeforge"
 
 [dependencies]
 askama = "0.14"
