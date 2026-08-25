@@ -67,11 +67,12 @@ Provide a structured analysis with these exact sections:
    - Target audience skill level (beginner / intermediate / advanced)
    - Main viewer problem or desire this video tries to solve
 
-2. Content Structure & Hook Breakdown (Made to Stick / SUCCESs Framework)
-   - Hook used in the first 0–60 seconds: Unexpectedness, Concrete anchor, Emotional curiosity gap
-   - Main sections / chapters (with approximate timing if possible)
-   - How value is delivered (theory, code examples, visuals, storytelling, etc.)
-   - Closing / CTA style & Gap-Fulfillment redirection
+2. First-Screen Retention Contract & Pacing Breakdown (0:00–1:00)
+   - 0:00–0:15 High-Stakes Hook: Core runtime crash / failure mode / unexpected tension
+   - 0:15–0:35 Explicit Contract: Concrete payoff and mental model promised
+   - 0:35–1:00 Engineering Vehicle: Codebase, tool, or framework introduced
+   - Fluff & Friction Audit: Any generic intros, channel branding, or delayed payoffs in 0–30s
+   - Code density & pacing: Defect -> Root Cause -> Clean Fix structure
 
 3. Strengths
    - What this video does particularly well
@@ -90,11 +91,17 @@ Provide a structured analysis with these exact sections:
 
 6. Content Gap Opportunities (Obviously Awesome / Blue Ocean Positioning)
    - 5–8 specific video ideas that fill gaps left by this video, positioned to make the competitor's version look incomplete
-   - For each idea include: Title suggestion + Why it fills a gap + Recommended format (long-form / Shorts / series)
+   - For each idea include: Title suggestion + Why it fills a gap + Recommended format (70% Core Search / 20% Deep Dive / 10% Edge)
 
-7. Packaging & Title Insights (Made to Stick & Cialdini Influence)
-   - High-CTR title suggestions engineered with concrete curiosity gaps and authority cues
-   - Thumbnail concept ideas that visually anchor the core problem
+7. Packaging & Title Insights (Loewenstein Information Gap & Cialdini Influence)
+   - High-CTR title suggestions engineered with Loewenstein curiosity gaps, definite referring expressions, and threat prevention
+   - Thumbnail concept ideas: Single focal mark on pure black `#000000`, 2-line headline, zero decorative container clutter
+
+8. Downstream Multimodal Asset Funnel (Converting Traffic into Owned Equity)
+   - Markdown Study Guide Outline: Core rungs, trade-off matrix, mental model diagram
+   - Interactive Self-Assessment Quiz: 3–5 conceptual & compiler-level verification questions
+   - SEO Technical Blog Outline: For Dev.to, GitHub README, or technical newsletter
+   - GitHub Companion Repo Blueprint: Structure for runnable code companion
 
 Be specific, practical, and focused on actionable opportunities for a channel that explains concepts clearly with visual motion graphics and real-world problem solving.
 "#);

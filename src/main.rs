@@ -6,7 +6,7 @@ use std::time::Instant;
 use clap::Parser;
 use tubeforge::cli::{
     CheckKind, Cli, Command, CommentsKind, ExportFormat as CliExportFormat, FilmotKind, GreedyKind,
-    IngestKind, KeywordsKind, SeedsAction, TagsKind, ThumbnailKind, TranscriptKind,
+    IngestKind, KanbanKind, KeywordsKind, SeedsAction, TagsKind, ThumbnailKind, TranscriptKind,
 };
 use tubeforge::commands;
 use tubeforge::config;
@@ -310,6 +310,79 @@ async fn dispatch(cli: &Cli) -> Result<(serde_json::Value, Option<QuotaInfo>), T
                 commands::greedy::run_daemon(&cfg, *interval, *max).await?
             }
             GreedyKind::Stop => commands::greedy::run_stop(&cfg).await?,
+        },
+        Command::Kanban { kind } => match kind {
+            KanbanKind::Create {
+                title,
+                channel,
+                status,
+                topic,
+                framework,
+                duration,
+                keyword,
+                youtube_url,
+                notes,
+            } => {
+                commands::kanban::run_create(
+                    &cfg,
+                    &commands::kanban::CreateTicketInput {
+                        title: title.clone(),
+                        channel: channel.clone(),
+                        status: status.clone(),
+                        topic: topic.clone(),
+                        framework: framework.clone(),
+                        optimal_duration_sec: *duration,
+                        target_keyword: keyword.clone(),
+                        youtube_url: youtube_url.clone(),
+                        notes: notes.clone(),
+                    },
+                )
+                .await?
+            }
+            KanbanKind::FromResearch {
+                topic,
+                channel,
+                title,
+                framework,
+                duration,
+            } => {
+                commands::kanban::run_from_research(
+                    &cfg,
+                    topic,
+                    channel,
+                    title.as_deref(),
+                    framework.as_deref(),
+                    *duration,
+                )
+                .await?
+            }
+            KanbanKind::List { status, channel } => {
+                commands::kanban::run_list(&cfg, status.as_deref(), channel.as_deref()).await?
+            }
+            KanbanKind::Move {
+                ticket_id,
+                status,
+                youtube_url,
+                video_id,
+            } => {
+                commands::kanban::run_move(
+                    &cfg,
+                    ticket_id,
+                    status,
+                    youtube_url.as_deref(),
+                    video_id.as_deref(),
+                )
+                .await?
+            }
+            KanbanKind::Show { ticket_id } => {
+                commands::kanban::run_show(&cfg, ticket_id).await?
+            }
+            KanbanKind::Delete { ticket_id } => {
+                commands::kanban::run_delete(&cfg, ticket_id).await?
+            }
+            KanbanKind::Prompt { ticket_id } => {
+                commands::kanban::run_prompt(&cfg, ticket_id).await?
+            }
         },
         // Serve never reaches the envelope pipeline (special-cased in run()).
         Command::Serve { .. } => unreachable!("serve is handled before dispatch"),

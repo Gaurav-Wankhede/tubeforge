@@ -6,6 +6,7 @@
 
 pub mod actions;
 pub mod audit;
+pub mod bandit;
 pub mod content;
 pub mod forecast;
 pub mod gaps;

@@ -240,6 +240,11 @@ pub enum Command {
         #[command(subcommand)]
         kind: GreedyKind,
     },
+    /// Kanban ticket management for video production workflow and roadmap.
+    Kanban {
+        #[command(subcommand)]
+        kind: KanbanKind,
+    },
     /// Serve the local HTMX dashboard (PRD §5.4 deferred item).
     ///
     /// Long-running server: binds loopback only, never emits the JSON
@@ -259,6 +264,100 @@ pub enum Command {
     /// responses (progress/result/error) to stdout. stdout is reserved for
     /// responses — it never emits the JSON envelope.
     Rpc,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum KanbanKind {
+    /// Create a new Kanban ticket manually.
+    Create {
+        /// Ticket title (e.g. "The 7 Levers of Influence Explained").
+        #[arg(long, value_name = "TITLE")]
+        title: String,
+        /// Channel name (TECHVERSE, BOOKVERSE, etc.).
+        #[arg(long, value_name = "CHANNEL")]
+        channel: String,
+        /// Initial status (todo, inprogress, done, published). Default: todo.
+        #[arg(long, value_name = "STATUS")]
+        status: Option<String>,
+        /// Topic name (binds to keyword research).
+        #[arg(long, value_name = "TOPIC")]
+        topic: Option<String>,
+        /// Core framework or mental model name.
+        #[arg(long, value_name = "FRAMEWORK")]
+        framework: Option<String>,
+        /// Optimal target duration in seconds (e.g. 720 for 12m).
+        #[arg(long, value_name = "SECS")]
+        duration: Option<i64>,
+        /// Target primary keyword.
+        #[arg(long, value_name = "KW")]
+        keyword: Option<String>,
+        /// Published YouTube URL (if already uploaded).
+        #[arg(long, value_name = "URL")]
+        youtube_url: Option<String>,
+        /// Execution or production notes.
+        #[arg(long, value_name = "NOTES")]
+        notes: Option<String>,
+    },
+    /// Create a ticket automatically mapped from existing keyword research.
+    FromResearch {
+        /// Research topic name (must exist in keyword_research or will be queried).
+        #[arg(value_name = "TOPIC")]
+        topic: String,
+        /// Target channel (TECHVERSE or BOOKVERSE).
+        #[arg(long, value_name = "CHANNEL")]
+        channel: String,
+        /// Custom title override.
+        #[arg(long, value_name = "TITLE")]
+        title: Option<String>,
+        /// Framework / mental model name.
+        #[arg(long, value_name = "FRAMEWORK")]
+        framework: Option<String>,
+        /// Target duration in seconds.
+        #[arg(long, value_name = "SECS")]
+        duration: Option<i64>,
+    },
+    /// List Kanban tickets.
+    List {
+        /// Filter by status (todo, inprogress, done, published).
+        #[arg(long, value_name = "STATUS")]
+        status: Option<String>,
+        /// Filter by channel (TECHVERSE, BOOKVERSE).
+        #[arg(long, value_name = "CHANNEL")]
+        channel: Option<String>,
+    },
+    /// Move/transition a ticket's status.
+    Move {
+        /// Ticket ID (e.g. ticket-abc12345).
+        #[arg(value_name = "TICKET_ID")]
+        ticket_id: String,
+        /// New status (todo, inprogress, done, published).
+        #[arg(value_name = "STATUS")]
+        status: String,
+        /// Published YouTube URL (when marking published).
+        #[arg(long, value_name = "URL")]
+        youtube_url: Option<String>,
+        /// Stored video ID in TubeForge corpus.
+        #[arg(long, value_name = "ID")]
+        video_id: Option<String>,
+    },
+    /// Show full details of a ticket and its interconnected research.
+    Show {
+        /// Ticket ID.
+        #[arg(value_name = "TICKET_ID")]
+        ticket_id: String,
+    },
+    /// Delete a Kanban ticket.
+    Delete {
+        /// Ticket ID.
+        #[arg(value_name = "TICKET_ID")]
+        ticket_id: String,
+    },
+    /// Generate First-Screen contract production prompt blueprint for a ticket.
+    Prompt {
+        /// Ticket ID.
+        #[arg(value_name = "TICKET_ID")]
+        ticket_id: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -573,6 +672,15 @@ impl Cli {
                 },
                 GreedyKind::Daemon { .. } => "greedy daemon",
                 GreedyKind::Stop => "greedy stop",
+            },
+            Command::Kanban { kind } => match kind {
+                KanbanKind::Create { .. } => "kanban create",
+                KanbanKind::FromResearch { .. } => "kanban from-research",
+                KanbanKind::List { .. } => "kanban list",
+                KanbanKind::Move { .. } => "kanban move",
+                KanbanKind::Show { .. } => "kanban show",
+                KanbanKind::Delete { .. } => "kanban delete",
+                KanbanKind::Prompt { .. } => "kanban prompt",
             },
             Command::Serve { .. } => "serve",
             Command::Rpc => "rpc",

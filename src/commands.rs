@@ -21,6 +21,7 @@ pub mod health;
 pub mod ideas;
 pub mod ingest;
 pub mod init;
+pub mod kanban;
 pub mod keywords;
 pub mod metadata;
 pub mod prompt;

@@ -206,7 +206,7 @@ pub struct KeywordTrendingRow {
     pub actively_published: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct KeywordResearchRow {
     pub keyword: String,
     pub at: String,
@@ -288,6 +288,24 @@ pub struct GreedyHistoryInsert<'a> {
     pub mean_views: f64,
     pub source: &'a str,
     pub duration_ms: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct KanbanTicketRow {
+    pub ticket_id: String,
+    pub title: String,
+    pub channel: String,
+    pub status: String,
+    pub topic: Option<String>,
+    pub framework: Option<String>,
+    pub optimal_duration_sec: Option<i64>,
+    pub target_keyword: Option<String>,
+    pub youtube_url: Option<String>,
+    pub video_id: Option<String>,
+    pub research_ref: Option<String>,
+    pub notes: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -617,6 +635,44 @@ fn keyword_research_from_row(r: &Row) -> KeywordResearchRow {
         actively_published: b(r, "actively_published"),
         suggested_tags: json_s(r, "suggested_tags"),
         related_keywords: json_s(r, "related_keywords"),
+    }
+}
+
+fn kanban_to_row(k: &KanbanTicketRow) -> Row {
+    let mut r = Row::new();
+    r.insert("ticket_id".to_string(), v_text(&k.ticket_id));
+    r.insert("title".to_string(), v_text(&k.title));
+    r.insert("channel".to_string(), v_text(&k.channel));
+    r.insert("status".to_string(), v_text(&k.status));
+    r.insert("topic".to_string(), v_opt_text(k.topic.as_deref()));
+    r.insert("framework".to_string(), v_opt_text(k.framework.as_deref()));
+    r.insert("optimal_duration_sec".to_string(), v_int(k.optimal_duration_sec));
+    r.insert("target_keyword".to_string(), v_opt_text(k.target_keyword.as_deref()));
+    r.insert("youtube_url".to_string(), v_opt_text(k.youtube_url.as_deref()));
+    r.insert("video_id".to_string(), v_opt_text(k.video_id.as_deref()));
+    r.insert("research_ref".to_string(), v_opt_text(k.research_ref.as_deref()));
+    r.insert("notes".to_string(), v_opt_text(k.notes.as_deref()));
+    r.insert("created_at".to_string(), v_text(&k.created_at));
+    r.insert("updated_at".to_string(), v_text(&k.updated_at));
+    r
+}
+
+fn kanban_from_row(r: &Row) -> KanbanTicketRow {
+    KanbanTicketRow {
+        ticket_id: t(r, "ticket_id"),
+        title: t(r, "title"),
+        channel: t(r, "channel"),
+        status: t(r, "status"),
+        topic: opt_s(r, "topic"),
+        framework: opt_s(r, "framework"),
+        optimal_duration_sec: opt_i(r, "optimal_duration_sec"),
+        target_keyword: opt_s(r, "target_keyword"),
+        youtube_url: opt_s(r, "youtube_url"),
+        video_id: opt_s(r, "video_id"),
+        research_ref: opt_s(r, "research_ref"),
+        notes: opt_s(r, "notes"),
+        created_at: t(r, "created_at"),
+        updated_at: t(r, "updated_at"),
     }
 }
 
@@ -1782,6 +1838,19 @@ impl Db {
         Ok(())
     }
 
+    pub async fn get_keyword_research(
+        &self,
+        keyword: &str,
+    ) -> Result<Option<KeywordResearchRow>, TubeforgeError> {
+        let eng = self.engine.lock().unwrap();
+        let rows = eng.all("keyword_research")?;
+        let matching = rows
+            .into_iter()
+            .filter(|r| t(r, "keyword").eq_ignore_ascii_case(keyword))
+            .max_by_key(|r| t(r, "at"));
+        Ok(matching.as_ref().map(keyword_research_from_row))
+    }
+
     /// Begin the single batch write transaction.
     pub async fn begin_batch(&mut self) -> Result<Batch<'_>, TubeforgeError> {
         Ok(Batch { db: self })
@@ -2419,6 +2488,112 @@ impl Db {
         seeds.truncate(limit);
         Ok(seeds)
     }
+
+    // -----------------------------------------------------------------------
+    // Kanban Tickets CRUD & Workflow
+    // -----------------------------------------------------------------------
+
+    pub async fn create_kanban_ticket(
+        &self,
+        ticket: &KanbanTicketRow,
+    ) -> Result<String, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        let mut tx = eng.begin();
+        tx.put("kanban_tickets", kanban_to_row(ticket))?;
+        tx.commit()?;
+        Ok(ticket.ticket_id.clone())
+    }
+
+    pub async fn get_kanban_ticket(
+        &self,
+        ticket_id: &str,
+    ) -> Result<Option<KanbanTicketRow>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
+        let row = eng.get("kanban_tickets", ticket_id)?;
+        Ok(row.as_ref().map(kanban_from_row))
+    }
+
+    pub async fn list_kanban_tickets(
+        &self,
+        status: Option<&str>,
+        channel: Option<&str>,
+    ) -> Result<Vec<KanbanTicketRow>, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.reload()?;
+        let mut tickets: Vec<KanbanTicketRow> = eng
+            .all("kanban_tickets")?
+            .iter()
+            .map(kanban_from_row)
+            .filter(|t| {
+                if let Some(st) = status {
+                    if !t.status.eq_ignore_ascii_case(st) {
+                        return false;
+                    }
+                }
+                if let Some(ch) = channel {
+                    if !t.channel.eq_ignore_ascii_case(ch) {
+                        return false;
+                    }
+                }
+                true
+            })
+            .collect();
+        // Sort by created_at descending
+        tickets.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        Ok(tickets)
+    }
+
+    pub async fn update_kanban_ticket(
+        &self,
+        ticket: &KanbanTicketRow,
+    ) -> Result<(), TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        let mut tx = eng.begin();
+        tx.put("kanban_tickets", kanban_to_row(ticket))?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub async fn move_kanban_ticket(
+        &self,
+        ticket_id: &str,
+        new_status: &str,
+        youtube_url: Option<&str>,
+        video_id: Option<&str>,
+    ) -> Result<KanbanTicketRow, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        let Some(row) = eng.get("kanban_tickets", ticket_id)? else {
+            return Err(TubeforgeError::Usage(format!(
+                "ticket not found: {ticket_id}"
+            )));
+        };
+        let mut ticket = kanban_from_row(&row);
+        ticket.status = new_status.to_lowercase();
+        if let Some(url) = youtube_url {
+            ticket.youtube_url = Some(url.to_string());
+        }
+        if let Some(vid) = video_id {
+            ticket.video_id = Some(vid.to_string());
+        }
+        ticket.updated_at = crate::util::now_rfc3339();
+
+        let mut tx = eng.begin();
+        tx.put("kanban_tickets", kanban_to_row(&ticket))?;
+        tx.commit()?;
+        Ok(ticket)
+    }
+
+    pub async fn delete_kanban_ticket(&self, ticket_id: &str) -> Result<bool, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        let exists = eng.get("kanban_tickets", ticket_id)?.is_some();
+        if exists {
+            let mut tx = eng.begin();
+            tx.delete("kanban_tickets", ticket_id)?;
+            tx.commit()?;
+        }
+        Ok(exists)
+    }
 }
 
 /// The write side of one ingest batch. tfdb's `Tx` offers no read access (its
@@ -3020,5 +3195,48 @@ mod tests {
             0
         );
         assert_eq!(block_on(db.list_alerts(0)).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_kanban_ticket_crud() {
+        let (_d, db) = open_test();
+        let ticket = KanbanTicketRow {
+            ticket_id: "ticket-test1".to_string(),
+            title: "Test Video 1".to_string(),
+            channel: "BOOKVERSE".to_string(),
+            status: "todo".to_string(),
+            topic: Some("influence".to_string()),
+            framework: Some("7 Levers".to_string()),
+            optimal_duration_sec: Some(720),
+            target_keyword: Some("influence summary".to_string()),
+            youtube_url: None,
+            video_id: None,
+            research_ref: Some("influence".to_string()),
+            notes: Some("test notes".to_string()),
+            created_at: crate::util::now_rfc3339(),
+            updated_at: crate::util::now_rfc3339(),
+        };
+
+        block_on(db.create_kanban_ticket(&ticket)).unwrap();
+        let fetched = block_on(db.get_kanban_ticket("ticket-test1")).unwrap().expect("found");
+        assert_eq!(fetched.title, "Test Video 1");
+        assert_eq!(fetched.status, "todo");
+
+        let moved = block_on(db.move_kanban_ticket(
+            "ticket-test1",
+            "inprogress",
+            Some("https://youtube.com/watch?v=123"),
+            Some("123"),
+        ))
+        .unwrap();
+        assert_eq!(moved.status, "inprogress");
+        assert_eq!(moved.youtube_url.as_deref(), Some("https://youtube.com/watch?v=123"));
+
+        let list = block_on(db.list_kanban_tickets(Some("inprogress"), Some("BOOKVERSE"))).unwrap();
+        assert_eq!(list.len(), 1);
+
+        let deleted = block_on(db.delete_kanban_ticket("ticket-test1")).unwrap();
+        assert!(deleted);
+        assert!(block_on(db.get_kanban_ticket("ticket-test1")).unwrap().is_none());
     }
 }

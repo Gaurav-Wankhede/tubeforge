@@ -20,7 +20,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// The five researched-creator title formulas.
+/// The seven researched-creator title formulas (including Loewenstein information gap & threat prevention).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TitleFormula {
@@ -29,15 +29,19 @@ pub enum TitleFormula {
     IncomeClaim,
     ForbiddenKnowledge,
     HowToIdentity,
+    LoewensteinGap,
+    ThreatPrevention,
 }
 
 impl TitleFormula {
-    pub const ALL: [TitleFormula; 5] = [
+    pub const ALL: [TitleFormula; 7] = [
         TitleFormula::TimeAnchor,
         TitleFormula::PreciseNumber,
         TitleFormula::IncomeClaim,
         TitleFormula::ForbiddenKnowledge,
         TitleFormula::HowToIdentity,
+        TitleFormula::LoewensteinGap,
+        TitleFormula::ThreatPrevention,
     ];
 
     pub fn label(self) -> &'static str {
@@ -47,6 +51,8 @@ impl TitleFormula {
             TitleFormula::IncomeClaim => "Income / wealth claim",
             TitleFormula::ForbiddenKnowledge => "Forbidden knowledge / feels illegal",
             TitleFormula::HowToIdentity => "How-to + identity / age constraint",
+            TitleFormula::LoewensteinGap => "Loewenstein information gap / definite referring expression",
+            TitleFormula::ThreatPrevention => "Loss aversion / high-stakes threat prevention",
         }
     }
 }
@@ -178,6 +184,49 @@ fn evidence(f: TitleFormula, lower: &str, original: &str) -> Option<String> {
                 (false, None) => None,
             }
         }
+        TitleFormula::LoewensteinGap => {
+            const WORDS: [&str; 14] = [
+                "this single",
+                "the single",
+                "the unseen",
+                "the #1",
+                "the real reason",
+                "the reason why",
+                "why 70%",
+                "why most",
+                "why your",
+                "what happens when",
+                "was it worth",
+                "the truth about",
+                "the missing",
+                "the only",
+            ];
+            first_match(lower, &WORDS)
+        }
+        TitleFormula::ThreatPrevention => {
+            const WORDS: [&str; 19] = [
+                "anti-pattern",
+                "destroying",
+                "destroy",
+                "crashes",
+                "crash",
+                "panics",
+                "panic",
+                "vulnerabilities",
+                "vulnerability",
+                "leak",
+                "leaks",
+                "cve",
+                "deadlock",
+                "race condition",
+                "production build",
+                "silent failure",
+                "silently",
+                "catastrophic",
+                "3 am",
+            ];
+            first_match(lower, &WORDS)
+        }
     };
     frag.map(|m| matched_fragment(original, m))
 }
@@ -248,7 +297,7 @@ fn matched_fragment(_original: &str, matched: &str) -> String {
     matched.to_string()
 }
 
-/// Generate ranked high-CTR title variants for a topic (Martell/Hormozi-style).
+/// Generate ranked high-CTR title variants for a topic (Martell/Hormozi/Loewenstein-style).
 /// `outcome` is an optional extreme-outcome phrase (e.g. "the brutal truth").
 pub fn variants(topic: &str, outcome: Option<&str>) -> Vec<String> {
     let t = topic.trim().trim_end_matches('.');
@@ -273,6 +322,9 @@ pub fn variants(topic: &str, outcome: Option<&str>) -> Vec<String> {
     if !oc.is_empty() {
         v.push(format!("How {t} {oc} (My Exact Process)"));
     }
+    // 6. Loewenstein Information Gap + Threat Prevention
+    v.push(format!("The Single Mistake Silently Destroying Your {t} Production Builds"));
+    v.push(format!("Why 70% of {t} Server Crashes Happen at 3 AM — And How to Fix It"));
     v
 }
 
@@ -312,6 +364,20 @@ mod tests {
     fn how_to_identity_detected() {
         let s = score("How to Build a SaaS for Beginners");
         assert!(s.detected.contains(&TitleFormula::HowToIdentity));
+    }
+
+    #[test]
+    fn loewenstein_gap_detected() {
+        let s = score("The Single Mistake You Are Making in Rust");
+        assert!(s.detected.contains(&TitleFormula::LoewensteinGap));
+        assert!(s.total >= 20.0);
+    }
+
+    #[test]
+    fn threat_prevention_detected() {
+        let s = score("The 10 Memory Anti-Patterns Silently Destroying Your Production Builds");
+        assert!(s.detected.contains(&TitleFormula::ThreatPrevention));
+        assert!(s.total >= 20.0);
     }
 
     #[test]

@@ -5,27 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-08-25
 
 ### Added
 
-- **Greedy Bot** — autonomous topic research engine that discovers and researches YouTube topics using the channel's own data. Five data sources (competitor tags, channel tags, tracked keywords, suggested tags, related keywords) feed an auto-seed pipeline (`greedy seeds init`). Topic candidates are generated from autocomplete suggestions, competitor tags, related keywords, and seed drift — deduplicated against research history with a 24h cooldown. Results are persisted to `greedy_research_history` / `greedy_topic_log` / `greedy_seeds` tables (schema v10, 25 tables total). Commands: `greedy run`, `greedy status`, `greedy seeds add|list|deactivate|init`, `greedy daemon`, `greedy stop`. Daemon mode runs on a configurable interval with PID file management and graceful SIGINT/SIGTERM shutdown.
-- **Engine independence (v4.0)** — storage moved to a from-scratch embedded
-  **`tfdb`** engine (`.wal` + `.dat`, fsync-on-commit WAL + atomic checkpoint,
-  pure Rust, no SQLite/SQL, no external database); **own BM25** engine replaces
-  tantivy; **raw-Hyper** web framework replaces Axum; **SSE** replaces htmx
-  polling; **WebSocket JSON-RPC** method surface.
-- **Stdio JSON-RPC agent bridge** — `tubeforge rpc` connects agent harnesses
-  (OpenCode, Claude Code, Codex, Hermes, Pi Agent) over line-delimited JSON-RPC
-  on stdin/stdout (same method surface as the dashboard `/ws`). Replaces the
-  removed `mcp`/`tursodb` external server.
-- **Content layer** — `analyze`, `transcript`, `metadata`, `comments`, `gaps`,
-  `forecast`, `suggest`, `tags`, `videos dedupe`; growth forecasting (weighted
-  OLS on `channel_snapshots`); packaging-psychology title formulas.
-- **Scoring** — extended to **18 SEO** components (10 structural + 5 vidIQ +
-  3 graph via `graph_scores`) + 7 GEO + packaging-psychology supporting layer.
-- **Knowledge Graph** — kg_entities/kg_relations/kg_communities tables, PageRank
-  + Louvain, `graph_scores` on existing endpoints (internal-only; no `/api/kg/*`).
+- **Built-in Kanban Ticket System (`kanban` command)** — Full TODO and roadmap lifecycle management for future video production. Directly interlinks with TubeForge's research corpus (`keyword_research`, competitor SERPs, suggested tags) without duplicating data.
+  - Table `kanban_tickets` added to `tfdb_schema` (26 tables total).
+  - Subcommands: `kanban create`, `kanban from-research`, `kanban list`, `kanban move`, `kanban show`, `kanban delete`, `kanban prompt`.
+  - Supports dual-channel taxonomy (`TECHVERSE` and `BOOKVERSE`) and state transitions (`todo` ➔ `inprogress` ➔ `done` ➔ `published`) with YouTube URL and video ID attachment.
+  - Generates First-Screen contract production blueprints automatically from research data.
+- **Contextual Multi-Armed Bandit (LinUCB) Engine** (`analytics/bandit.rs`) — Linear UCB arm scoring with online ridge regression and Sherman-Morrison updates for optimal title/thumbnail variant selection under uncertainty.
+- **Loewenstein Gap & Threat Prevention Scorer** (`scoring/psych.rs`) — Behavioral psychology title scoring for definite referring expressions, curiosity gaps, and loss-aversion patterns.
+- **First-Screen Retention Contract Bridge** (`commands/prompt.rs`) — AI prompt generator enforcing the 0:00–1:00 retention contract (0:00–0:15 Hook ➔ 0:15–0:35 Payoff ➔ 0:35–1:00 Vehicle).
+- **Tufte Data-Ink Thumbnail Generator** (`templates/default.html`) — Pure black `#000000` radical simplicity thumbnail template with single left focal mark and bold 2-line headline.
+- **Greedy Bot** — autonomous topic research engine that discovers and researches YouTube topics using the channel's own data. Five data sources feed an auto-seed pipeline. Commands: `greedy run`, `greedy status`, `greedy seeds add|list|deactivate|init`, `greedy daemon`, `greedy stop`.
+- **Engine independence (v4.0)** — storage moved to a from-scratch embedded **`tfdb`** engine (`.wal` + `.dat`, fsync-on-commit WAL + atomic checkpoint, pure Rust, no SQLite/SQL); **own BM25** engine; **raw-Hyper** server; **SSE** real-time updates.
+- **Stdio JSON-RPC agent bridge** — `tubeforge rpc` connects agent harnesses over line-delimited JSON-RPC.
+- **Content layer** — `analyze`, `transcript`, `metadata`, `comments`, `gaps`, `forecast`, `suggest`, `tags`, `videos dedupe`.
+- **Scoring** — extended to **18 SEO** components + 7 GEO + packaging-psychology supporting layer.
+- **Knowledge Graph** — `kg_entities`/`kg_relations`/`kg_communities` tables, PageRank + Louvain clustering.
 
 ## [0.1.0] - 2026-08-04
 

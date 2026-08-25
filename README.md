@@ -36,6 +36,7 @@ TubeForge is designed to operate locally without cloud dependencies, external da
 - **Embedded `tfdb` Storage Engine**: A crash-safe, write-ahead-log (`.wal` + `.dat`) storage system implemented in pure Rust without SQLite, PostgreSQL, or C runtime dependencies.
 - **Mathematical SEO & GEO Scoring**: Computes an 18-component SEO score and a 7-component Generative Engine Optimization (GEO) score against real-time BM25 index corpus baselines.
 - **Autonomous Greedy Engine**: Discovers, qualifies, and tracks high-demand, low-competition video topics on autopilot using channel graph tags, competitor analytics, and search suggestion drift.
+- **Built-in Production Kanban Engine**: Native video production TODO and roadmap system interconnected directly with TubeForge's keyword research, SEO opportunity scores, and competitor SERP analytics across dual-channel taxonomy (`TECHVERSE` and `BOOKVERSE`).
 - **Embedded Web Dashboard**: Server-rendered UI on raw Hyper featuring Server-Sent Events (SSE) and WebSocket JSON-RPC channels with server-rendered inline SVGs and zero JavaScript framework dependencies.
 - **Agent-Native Protocol (`tubeforge rpc`)**: Direct stdio JSON-RPC protocol interface for AI coding harnesses (OpenCode, Claude Code, Codex, Hermes, Pi Agent) to query channel intelligence on demand.
 - **Deterministic Thumbnail Renderer**: Generates pixel-perfect 1280x720 PNG thumbnails from HTML/CSS templates via headless Chromium.
@@ -196,6 +197,18 @@ TubeForge provides a unified CLI interface. Every command supports the `--json` 
 | `tubeforge greedy daemon` | Runs the continuous topic-hunting engine in the background. |
 | `tubeforge greedy status` | Displays execution history, cooldowns, and discovered opportunities. |
 | `tubeforge greedy stop` | Gracefully terminates running background daemon via PID signal. |
+
+### Video Production & Roadmap (`kanban`)
+
+| Command | Description |
+|---|---|
+| `tubeforge kanban from-research <topic> --channel <ch>` | Creates a ticket directly mapped to existing keyword research & SEO metrics. |
+| `tubeforge kanban create --title <t> --channel <ch>` | Manually creates a new video production Kanban ticket. |
+| `tubeforge kanban list [--status <s>] [--channel <c>]` | Lists production tickets filtered by status (`todo`, `inprogress`, `done`, `published`) or channel. |
+| `tubeforge kanban move <id> <status> [--url <yt>]` | Transitions ticket lifecycle status and attaches published video URLs. |
+| `tubeforge kanban show <id>` | Displays full ticket metadata and interconnected live keyword research. |
+| `tubeforge kanban prompt <id>` | Generates a 0:00–1:00 First-Screen retention contract production blueprint for the ticket. |
+| `tubeforge kanban delete <id>` | Removes a ticket from the production database. |
 
 ### Interfaces & Operations
 

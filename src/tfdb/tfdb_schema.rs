@@ -186,6 +186,21 @@ pub fn all() -> Vec<TableSchema> {
             .text("status")
             .text("reason")
             .text("attempted_at"),
+        // -- kanban ticket management --
+        TableSchema::new("kanban_tickets", "ticket_id")
+            .text("title")
+            .text("channel")
+            .text("status")
+            .text("topic")
+            .text("framework")
+            .int("optimal_duration_sec")
+            .text("target_keyword")
+            .text("youtube_url")
+            .text("video_id")
+            .text("research_ref")
+            .text("notes")
+            .text("created_at")
+            .text("updated_at"),
     ]
 }
 
@@ -240,12 +255,13 @@ mod tests {
             "keyword_research",
             "competitors",
             "ingest_log",
+            "kanban_tickets",
         ] {
             assert!(
                 names.iter().any(|n| n == required),
                 "missing table {required}"
             );
         }
-        assert_eq!(schemas.len(), 25);
+        assert_eq!(schemas.len(), 26);
     }
 }
