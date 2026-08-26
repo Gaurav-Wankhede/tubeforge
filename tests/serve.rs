@@ -3,7 +3,6 @@
 //! The server is spawned on an ephemeral port (port 0) with a temp database,
 //! then exercised over real HTTP (reqwest). Mutations are verified through
 //! the storage layer afterwards — the same write paths the CLI uses.
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use futures::StreamExt;
@@ -126,6 +125,22 @@ async fn seed_db() -> Db {
 
 /// Spawn the app on an ephemeral port; returns (base_url, bound port, Db).
 async fn spawn_server() -> (String, u16, Db) {
+    // These tests assert against `/legacy/*` — routes that exist only in the
+    // dual-UI layout (SPA owns `/`, HTMX keeps `/legacy/*`). Ship a minimal
+    // SPA shell in the state's own data_dir so `find_spa_dist()` enters that
+    // layout deterministically; CI checkouts carry no `frontend/dist`, and a
+    // host working tree must not decide what this binary exercises. This
+    // also stops sharing one hardcoded `/tmp` data dir across parallel runs.
+    let spa_dir = Box::leak(Box::new(tempfile::tempdir().expect("tempdir")));
+    let dist = spa_dir.path().join("frontend/dist");
+    std::fs::create_dir_all(&dist).expect("create dist dir");
+    std::fs::write(
+        dist.join("index.html"),
+        "<!doctype html><html><head><title>TubeForge</title></head>\
+         <body><div id=\"root\">TubeForge</div></body></html>",
+    )
+    .expect("write spa fixture");
+
     let db = seed_db().await;
     // Second handle to the same in-memory engine (`Db` is `Arc<Mutex<Engine>>`,
     // so a clone shares one engine; the server keeps the first Arc). Used for
@@ -139,7 +154,7 @@ async fn spawn_server() -> (String, u16, Db) {
         db: Arc::new(db),
         bind: addr.to_string(),
         ytdlp: None,
-        data_dir: PathBuf::from("/tmp/tf-serve-test-data"),
+        data_dir: spa_dir.path().to_path_buf(),
         own_channel: None,
         kg: Arc::new(std::sync::Mutex::new(None)),
     };
