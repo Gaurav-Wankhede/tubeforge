@@ -2695,6 +2695,10 @@ impl Db {
         Ok(ticket)
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument maps 1:1 to an optional kanban edit flag; a params struct would only relocate the list"
+    )]
     pub async fn update_kanban_ticket_fields(
         &self,
         ticket_id: &str,

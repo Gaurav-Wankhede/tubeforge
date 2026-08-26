@@ -96,16 +96,12 @@ impl LinUcbArmState {
                         break;
                     }
                 }
-                if let Some(r) = swap_row {
-                    for col in 0..(2 * d) {
-                        let tmp = aug[i * 2 * d + col];
-                        aug[i * 2 * d + col] = aug[r * 2 * d + col];
-                        aug[r * 2 * d + col] = tmp;
-                    }
-                    pivot = aug[i * 2 * d + i];
-                } else {
-                    return None; // Singular matrix
+                // No swappable pivot remaining -> singular matrix.
+                let r = swap_row?;
+                for col in 0..(2 * d) {
+                    aug.swap(i * 2 * d + col, r * 2 * d + col);
                 }
+                pivot = aug[i * 2 * d + i];
             }
 
             let inv_pivot = 1.0 / pivot;
@@ -156,10 +152,12 @@ impl LinUcbArmState {
         }
 
         // expected_payoff = x^T * theta
-        let mut expected_payoff = 0.0;
-        for i in 0..d {
-            expected_payoff += context.features[i] * theta[i];
-        }
+        let expected_payoff: f64 = context
+            .features
+            .iter()
+            .zip(theta.iter())
+            .map(|(x, t)| x * t)
+            .sum();
 
         // var = x^T * A^{-1} * x
         let mut inv_a_x = vec![0.0; d];
@@ -171,10 +169,13 @@ impl LinUcbArmState {
             inv_a_x[i] = sum;
         }
 
-        let mut variance = 0.0;
-        for i in 0..d {
-            variance += context.features[i] * inv_a_x[i];
-        }
+        // variance = x^T * A^{-1} * x
+        let variance: f64 = context
+            .features
+            .iter()
+            .zip(inv_a_x.iter())
+            .map(|(x, v)| x * v)
+            .sum();
 
         let ucb_bonus = alpha * variance.max(0.0).sqrt();
         expected_payoff + ucb_bonus

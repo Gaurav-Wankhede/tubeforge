@@ -28,7 +28,7 @@ pub async fn run_create(cfg: &Config, input: &CreateTicketInput) -> Result<Value
     let db = Db::open(&cfg.db_path).await?;
     let now = crate::util::now_rfc3339();
     let status = input.status.as_deref().unwrap_or("todo").to_lowercase();
-    let ticket_id = format!("ticket-{}", &crate::util::nanoid(8));
+    let ticket_id = format!("ticket-{}", crate::util::nanoid(8));
 
     let ticket = KanbanTicketRow {
         ticket_id: ticket_id.clone(),
@@ -88,7 +88,7 @@ pub async fn run_from_research(
         .and_then(|r| serde_json::from_str::<Vec<Value>>(&r.suggested_tags).ok())
         .map_or(0, |tags| tags.len());
 
-    let ticket_id = format!("ticket-{}", &crate::util::nanoid(8));
+    let ticket_id = format!("ticket-{}", crate::util::nanoid(8));
     let ticket = KanbanTicketRow {
         ticket_id: ticket_id.clone(),
         title,
