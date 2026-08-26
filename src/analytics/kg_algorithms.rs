@@ -155,12 +155,14 @@ pub fn louvain_communities(graph: &KnowledgeGraph) -> HashMap<String, i64> {
             // Count neighbor communities (weighted by edge weight)
             let mut comm_weights: HashMap<i64, f64> = HashMap::new();
             for (neighbor, _, weight) in graph.neighbors(node) {
-                let nc = community[neighbor];
-                *comm_weights.entry(nc).or_insert(0.0) += weight;
+                if let Some(&nc) = community.get(neighbor) {
+                    *comm_weights.entry(nc).or_insert(0.0) += weight;
+                }
             }
             for (neighbor, _, weight) in graph.reverse_neighbors(node) {
-                let nc = community[neighbor];
-                *comm_weights.entry(nc).or_insert(0.0) += weight;
+                if let Some(&nc) = community.get(neighbor) {
+                    *comm_weights.entry(nc).or_insert(0.0) += weight;
+                }
             }
 
             // Find the community with highest total weight
@@ -168,7 +170,8 @@ pub fn louvain_communities(graph: &KnowledgeGraph) -> HashMap<String, i64> {
                 .iter()
                 .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
             {
-                if best_comm != community[node] {
+                let current_comm = community.get(node).copied();
+                if current_comm != Some(best_comm) {
                     community.insert(node.clone(), best_comm);
                     changed = true;
                 }

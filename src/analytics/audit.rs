@@ -359,7 +359,7 @@ fn verdict_for(grade: &str, components: &[AuditComponent], name: &str) -> String
         .iter()
         .min_by(|a, b| a.score.total_cmp(&b.score))
         .map(|c| (c.name.clone(), c.score))
-        .unwrap_or(("metadata".to_string(), 0.0));
+        .unwrap_or_else(|| ("metadata".to_string(), 0.0));
     match grade {
         "A" => format!(
             "{name} is a well-optimized channel — keep the cadence and metadata discipline."

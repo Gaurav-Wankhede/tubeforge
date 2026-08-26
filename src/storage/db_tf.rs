@@ -245,6 +245,17 @@ pub struct KgRelationRow {
     pub source: String,
 }
 
+/// A raw row of the `kg_communities` table (used by the KG builder/loader).
+#[derive(Debug, Clone)]
+pub struct KgCommunityRow {
+    pub community_id: i64,
+    pub community_type: String,
+    pub member_count: i64,
+    pub top_entities: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 // ---------------------------------------------------------------------------
 // Greedy bot row types
 // ---------------------------------------------------------------------------
@@ -646,11 +657,23 @@ fn kanban_to_row(k: &KanbanTicketRow) -> Row {
     r.insert("status".to_string(), v_text(&k.status));
     r.insert("topic".to_string(), v_opt_text(k.topic.as_deref()));
     r.insert("framework".to_string(), v_opt_text(k.framework.as_deref()));
-    r.insert("optimal_duration_sec".to_string(), v_int(k.optimal_duration_sec));
-    r.insert("target_keyword".to_string(), v_opt_text(k.target_keyword.as_deref()));
-    r.insert("youtube_url".to_string(), v_opt_text(k.youtube_url.as_deref()));
+    r.insert(
+        "optimal_duration_sec".to_string(),
+        v_int(k.optimal_duration_sec),
+    );
+    r.insert(
+        "target_keyword".to_string(),
+        v_opt_text(k.target_keyword.as_deref()),
+    );
+    r.insert(
+        "youtube_url".to_string(),
+        v_opt_text(k.youtube_url.as_deref()),
+    );
     r.insert("video_id".to_string(), v_opt_text(k.video_id.as_deref()));
-    r.insert("research_ref".to_string(), v_opt_text(k.research_ref.as_deref()));
+    r.insert(
+        "research_ref".to_string(),
+        v_opt_text(k.research_ref.as_deref()),
+    );
     r.insert("notes".to_string(), v_opt_text(k.notes.as_deref()));
     r.insert("created_at".to_string(), v_text(&k.created_at));
     r.insert("updated_at".to_string(), v_text(&k.updated_at));
@@ -1321,6 +1344,29 @@ impl Db {
         let mut tx = eng.begin();
         tx.put("scores", row)?;
         tx.commit()?;
+        eng.checkpoint()?;
+        Ok(())
+    }
+
+    pub async fn upsert_scores_batch(
+        &self,
+        scores: &[(String, f64, f64, f64, String)],
+    ) -> Result<(), TubeforgeError> {
+        let now = crate::util::now_rfc3339();
+        let mut eng = self.engine.lock().unwrap();
+        let mut tx = eng.begin();
+        for (video_id, seo, geo, total, components) in scores {
+            let mut row = Row::new();
+            row.insert("video_id".to_string(), v_text(video_id));
+            row.insert("seo_score".to_string(), Value::Float(*seo));
+            row.insert("geo_score".to_string(), Value::Float(*geo));
+            row.insert("total_score".to_string(), Value::Float(*total));
+            row.insert("components".to_string(), v_json(components));
+            row.insert("computed_at".to_string(), v_text(&now));
+            tx.put("scores", row)?;
+        }
+        tx.commit()?;
+        eng.checkpoint()?;
         Ok(())
     }
 
@@ -1355,6 +1401,7 @@ impl Db {
             tx.put("keywords", row)?;
         }
         tx.commit()?;
+        eng.checkpoint()?;
         Ok(added)
     }
 
@@ -1378,6 +1425,7 @@ impl Db {
         let mut tx = eng.begin();
         tx.put("keyword_rankings", row)?;
         tx.commit()?;
+        eng.checkpoint()?;
         Ok(())
     }
 
@@ -2093,6 +2141,67 @@ impl Db {
         Ok(())
     }
 
+    /// Insert-or-replace all KG entities, relations, and communities in one batched transaction.
+    pub async fn persist_kg_batch(
+        &self,
+        entities: &[KgEntityRow],
+        relations: &[KgRelationRow],
+        communities: &[KgCommunityRow],
+    ) -> Result<(), TubeforgeError> {
+        let now = crate::util::now_rfc3339();
+        let mut eng = self.engine.lock().unwrap();
+        let mut tx = eng.begin();
+        for e in entities {
+            let mut row = Row::new();
+            row.insert("entity_id".to_string(), v_text(&e.entity_id));
+            row.insert("entity_type".to_string(), v_text(&e.entity_type));
+            row.insert("canonical_name".to_string(), v_text(&e.canonical_name));
+            row.insert("display_name".to_string(), v_text(&e.display_name));
+            row.insert("properties".to_string(), v_json(&e.properties));
+            row.insert(
+                "centrality".to_string(),
+                e.centrality.map(Value::Float).unwrap_or(Value::Null),
+            );
+            row.insert(
+                "community_id".to_string(),
+                e.community_id.map(Value::Int).unwrap_or(Value::Null),
+            );
+            row.insert("source".to_string(), v_text(&e.source));
+            row.insert("source_ref".to_string(), v_text(&e.source_ref));
+            row.insert("created_at".to_string(), v_text(&now));
+            row.insert("updated_at".to_string(), v_text(&now));
+            tx.put("kg_entities", row)?;
+        }
+        for r in relations {
+            let pk = format!(
+                "{}\x1f{}\x1f{}",
+                r.from_entity, r.to_entity, r.relation_type
+            );
+            let mut row = Row::new();
+            row.insert("relation_id".to_string(), v_text(&pk));
+            row.insert("from_entity".to_string(), v_text(&r.from_entity));
+            row.insert("to_entity".to_string(), v_text(&r.to_entity));
+            row.insert("relation_type".to_string(), v_text(&r.relation_type));
+            row.insert("weight".to_string(), Value::Float(r.weight));
+            row.insert("source".to_string(), v_text(&r.source));
+            row.insert("created_at".to_string(), v_text(&now));
+            tx.put("kg_relations", row)?;
+        }
+        for c in communities {
+            let mut row = Row::new();
+            row.insert("community_id".to_string(), Value::Int(c.community_id));
+            row.insert("community_type".to_string(), v_text(&c.community_type));
+            row.insert("member_count".to_string(), Value::Int(c.member_count));
+            row.insert("top_entities".to_string(), v_json(&c.top_entities));
+            row.insert("created_at".to_string(), v_text(&c.created_at));
+            row.insert("updated_at".to_string(), v_text(&c.updated_at));
+            tx.put("kg_communities", row)?;
+        }
+        tx.commit()?;
+        eng.checkpoint()?;
+        Ok(())
+    }
+
     /// Insert-or-replace one `kg_relations` row (dedup key: from/to/type).
     pub async fn persist_kg_relation(
         &self,
@@ -2552,6 +2661,7 @@ impl Db {
         let mut tx = eng.begin();
         tx.put("kanban_tickets", kanban_to_row(ticket))?;
         tx.commit()?;
+        eng.checkpoint()?;
         Ok(())
     }
 
@@ -2581,6 +2691,55 @@ impl Db {
         let mut tx = eng.begin();
         tx.put("kanban_tickets", kanban_to_row(&ticket))?;
         tx.commit()?;
+        eng.checkpoint()?;
+        Ok(ticket)
+    }
+
+    pub async fn update_kanban_ticket_fields(
+        &self,
+        ticket_id: &str,
+        title: Option<&str>,
+        status: Option<&str>,
+        topic: Option<&str>,
+        framework: Option<&str>,
+        duration: Option<i64>,
+        keyword: Option<&str>,
+        notes: Option<&str>,
+    ) -> Result<KanbanTicketRow, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        let Some(row) = eng.get("kanban_tickets", ticket_id)? else {
+            return Err(TubeforgeError::Usage(format!(
+                "ticket not found: {ticket_id}"
+            )));
+        };
+        let mut ticket = kanban_from_row(&row);
+        if let Some(t) = title {
+            ticket.title = t.to_string();
+        }
+        if let Some(s) = status {
+            ticket.status = s.to_lowercase();
+        }
+        if let Some(top) = topic {
+            ticket.topic = Some(top.to_string());
+        }
+        if let Some(f) = framework {
+            ticket.framework = Some(f.to_string());
+        }
+        if let Some(d) = duration {
+            ticket.optimal_duration_sec = Some(d);
+        }
+        if let Some(k) = keyword {
+            ticket.target_keyword = Some(k.to_string());
+        }
+        if let Some(n) = notes {
+            ticket.notes = Some(n.to_string());
+        }
+        ticket.updated_at = crate::util::now_rfc3339();
+
+        let mut tx = eng.begin();
+        tx.put("kanban_tickets", kanban_to_row(&ticket))?;
+        tx.commit()?;
+        eng.checkpoint()?;
         Ok(ticket)
     }
 
@@ -2591,6 +2750,7 @@ impl Db {
             let mut tx = eng.begin();
             tx.delete("kanban_tickets", ticket_id)?;
             tx.commit()?;
+            eng.checkpoint()?;
         }
         Ok(exists)
     }
@@ -3218,7 +3378,9 @@ mod tests {
         };
 
         block_on(db.create_kanban_ticket(&ticket)).unwrap();
-        let fetched = block_on(db.get_kanban_ticket("ticket-test1")).unwrap().expect("found");
+        let fetched = block_on(db.get_kanban_ticket("ticket-test1"))
+            .unwrap()
+            .expect("found");
         assert_eq!(fetched.title, "Test Video 1");
         assert_eq!(fetched.status, "todo");
 
@@ -3230,13 +3392,18 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(moved.status, "inprogress");
-        assert_eq!(moved.youtube_url.as_deref(), Some("https://youtube.com/watch?v=123"));
+        assert_eq!(
+            moved.youtube_url.as_deref(),
+            Some("https://youtube.com/watch?v=123")
+        );
 
         let list = block_on(db.list_kanban_tickets(Some("inprogress"), Some("BOOKVERSE"))).unwrap();
         assert_eq!(list.len(), 1);
 
         let deleted = block_on(db.delete_kanban_ticket("ticket-test1")).unwrap();
         assert!(deleted);
-        assert!(block_on(db.get_kanban_ticket("ticket-test1")).unwrap().is_none());
+        assert!(block_on(db.get_kanban_ticket("ticket-test1"))
+            .unwrap()
+            .is_none());
     }
 }

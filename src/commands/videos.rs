@@ -17,7 +17,7 @@ use crate::storage::Db;
 pub async fn run_dedupe(cfg: &Config) -> Result<Value, TubeforgeError> {
     let db = Db::open(&cfg.db_path).await?;
     let (merged, deleted) = crate::storage::db::dedupe_videos(&db).await?;
-    let remaining = db.count("SELECT count(*) FROM videos").await.unwrap_or(0);
+    let remaining = db.count("SELECT count(*) FROM videos").await?;
     Ok(json!({
         "groups_merged": merged,
         "rows_deleted": deleted,

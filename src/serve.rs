@@ -472,7 +472,7 @@ async fn score_detail(State(st): State<AppState>, Path(id): Path<String>) -> Res
         .unwrap_or_else(|| id.clone());
 
     let components: Value =
-        serde_json::from_str(&row.components).unwrap_or(Value::Object(Default::default()));
+        serde_json::from_str(&row.components).unwrap_or_else(|_| Value::Object(Default::default()));
     let seo: Vec<(String, String)> = SEO_COMPONENT_KEYS
         .iter()
         .map(|k| (k.to_string(), component_value(&components, k)))

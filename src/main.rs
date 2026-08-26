@@ -374,9 +374,30 @@ async fn dispatch(cli: &Cli) -> Result<(serde_json::Value, Option<QuotaInfo>), T
                 )
                 .await?
             }
-            KanbanKind::Show { ticket_id } => {
-                commands::kanban::run_show(&cfg, ticket_id).await?
+            KanbanKind::Update {
+                ticket_id,
+                title,
+                status,
+                topic,
+                framework,
+                duration,
+                keyword,
+                notes,
+            } => {
+                commands::kanban::run_update(
+                    &cfg,
+                    ticket_id,
+                    title.as_deref(),
+                    status.as_deref(),
+                    topic.as_deref(),
+                    framework.as_deref(),
+                    *duration,
+                    keyword.as_deref(),
+                    notes.as_deref(),
+                )
+                .await?
             }
+            KanbanKind::Show { ticket_id } => commands::kanban::run_show(&cfg, ticket_id).await?,
             KanbanKind::Delete { ticket_id } => {
                 commands::kanban::run_delete(&cfg, ticket_id).await?
             }

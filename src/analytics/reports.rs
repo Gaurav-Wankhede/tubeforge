@@ -273,9 +273,12 @@ pub async fn health(db: &Db, stale_days: u32) -> Result<Value, TubeforgeError> {
     let stale_cutoff = Utc::now() - chrono::Duration::days(stale_days as i64);
     let mut stale: Vec<Value> = Vec::new();
     for c in db.all_channels().await? {
+        // Unparsable fetched_at means freshness is unknown: fall back to epoch
+        // so the channel is reported stale (needs refresh) instead of being
+        // hidden by an optimistic "now". Closure keeps the clock read lazy.
         let fetched = DateTime::parse_from_rfc3339(&c.fetched_at)
             .map(|d| d.with_timezone(&Utc))
-            .unwrap_or(Utc::now());
+            .unwrap_or_else(|_| DateTime::<Utc>::UNIX_EPOCH);
         if fetched < stale_cutoff {
             stale.push(json!({
                 "channel_id": c.channel_id,
@@ -460,9 +463,11 @@ pub async fn evaluate_alerts(
     // 4. Stale channel rule.
     let stale_cutoff = Utc::now() - chrono::Duration::days(stale_days as i64);
     for c in db.all_channels().await? {
+        // Same fail-safe as the health report above: corrupt timestamps are
+        // unknown freshness, so they must surface as stale, not as fresh.
         let fetched = DateTime::parse_from_rfc3339(&c.fetched_at)
             .map(|d| d.with_timezone(&Utc))
-            .unwrap_or(Utc::now());
+            .unwrap_or_else(|_| DateTime::<Utc>::UNIX_EPOCH);
         if fetched < stale_cutoff {
             inserted += insert_once(
                 db,

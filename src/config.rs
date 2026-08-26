@@ -38,6 +38,11 @@ pub struct Config {
     /// exclude our channel from the competitor set, and target growth analysis
     /// (own channel vs the competitors it must beat).
     pub own_channel: Option<String>,
+    /// Niche guard for the greedy bot: comma-separated terms (from
+    /// `TUBEFORGE_NICHE_TERMS`) a candidate topic must contain
+    /// (case-insensitive) to be eligible for research. Empty = no filtering
+    /// (legacy behavior).
+    pub niche_terms: Vec<String>,
 }
 
 impl Config {
@@ -59,6 +64,7 @@ impl Config {
             ytdlp_client: None,
             ytdlp_js_runtime: None,
             own_channel: None,
+            niche_terms: Vec::new(),
         }
     }
 }
@@ -150,6 +156,15 @@ pub fn load(
         }
     }
 
+    if let Ok(v) = std::env::var("TUBEFORGE_NICHE_TERMS") {
+        cfg.niche_terms = v
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_lowercase)
+            .collect();
+    }
+
     Ok(cfg)
 }
 
@@ -174,7 +189,7 @@ fn load_env(cli_config: Option<&Path>) -> Result<(), TubeforgeError> {
             .map_err(|e| TubeforgeError::Config(format!("cannot load .env: {e}")))?;
         return Ok(());
     }
-    let home = home_dir().unwrap_or_default();
+    let home = home_dir().unwrap_or_else(|| PathBuf::from("."));
     let data_env = home.join(".tubeforge").join(".env");
     if data_env.exists() {
         dotenvy::from_path(&data_env).map_err(|e| {

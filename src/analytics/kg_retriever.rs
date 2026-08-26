@@ -299,7 +299,7 @@ impl<'a> HybridRetriever<'a> {
             .kg
             .get_entity(entity_id)
             .map(|e| (e.entity_type, e.display_name.clone()))
-            .unwrap_or((EntityType::Entity, entity_id.to_string()));
+            .unwrap_or_else(|| (EntityType::Entity, entity_id.to_string()));
 
         RetrievalResult {
             entity_id: entity_id.to_string(),

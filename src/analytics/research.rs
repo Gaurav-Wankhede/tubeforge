@@ -260,7 +260,15 @@ pub async fn inspect(
     let suggested_tags = harvest_tags(&results);
 
     // 5. Recency: are channels still uploading on this topic?
-    let recent = ytdlp.search_date(keyword, 5).await.unwrap_or_default();
+    // A failed recency probe must not silently read as a completed probe:
+    // log the data gap instead of swallowing the error into an empty set.
+    let recent = match ytdlp.search_date(keyword, 5).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(keyword, error = %e, "recency probe failed; treating as no recent uploads");
+            Vec::new()
+        }
+    };
     let now = chrono::Utc::now();
     let recent_uploads = recent
         .iter()
@@ -279,7 +287,15 @@ pub async fn inspect(
         Some(b) => {
             let hits = b.matches(FIELD_TITLE, keyword);
             let resonance = ((hits.len() as f64) / 20.0).min(1.0) * 100.0;
-            let videos = db.all_videos().await.unwrap_or_default();
+            // Resonance degrades gracefully, but a DB failure should be
+            // visible rather than silently reading as zero resonance.
+            let videos = match db.all_videos().await {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(error = %e, "all_videos failed; skipping corpus resonance");
+                    Vec::new()
+                }
+            };
             let by_id: std::collections::HashMap<&str, &crate::storage::db::VideoRow> =
                 videos.iter().map(|v| (v.video_id.as_str(), v)).collect();
             let matches: Vec<CorpusMatch> = hits

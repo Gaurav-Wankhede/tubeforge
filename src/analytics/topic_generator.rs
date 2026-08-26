@@ -36,11 +36,23 @@ impl std::fmt::Display for TopicSource {
     }
 }
 
+/// Niche guard: a topic passes when ANY configured term appears in it
+/// (case-insensitive substring). An empty term list disables filtering so
+/// behavior is identical to pre-guard releases.
+fn is_on_niche(topic: &str, niche_terms: &[String]) -> bool {
+    if niche_terms.is_empty() {
+        return true;
+    }
+    let lower = topic.to_lowercase();
+    niche_terms.iter().any(|term| lower.contains(term))
+}
+
 /// Generate a batch of candidate topics for the greedy bot, deduplicated
-/// against the research history.
+/// against the research history and filtered to the configured niche.
 pub async fn generate_candidates(
     db: &Db,
     clients: &FetchClients,
+    niche_terms: &[String],
 ) -> Result<Vec<TopicCandidate>, TubeforgeError> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut candidates: Vec<TopicCandidate> = Vec::new();
@@ -99,6 +111,12 @@ pub async fn generate_candidates(
         }
     }
 
+    // 5) Niche guard: drop off-niche drift BEFORE truncation so every
+    //    surviving candidate is worth research spend.
+    if !niche_terms.is_empty() {
+        candidates.retain(|c| is_on_niche(&c.topic, niche_terms));
+    }
+
     candidates.truncate(MAX_CANDIDATES);
     Ok(candidates)
 }
@@ -106,6 +124,8 @@ pub async fn generate_candidates(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prop_assert;
+    use proptest::prop_assert_eq;
 
     #[test]
     fn source_display_roundtrip() {
@@ -128,5 +148,82 @@ mod tests {
         };
         let c2 = c.clone();
         assert_eq!(c.topic, c2.topic);
+    }
+
+    #[test]
+    fn niche_guard_blocks_known_drift() {
+        // Regression: greedy researched music-band drift off an MCP/AI channel.
+        let terms = vec!["rust".to_string(), "mcp".to_string(), "ai".to_string()];
+        assert!(is_on_niche("build an MCP server in Rust", &terms));
+        assert!(is_on_niche("AI engineering roadmap", &terms));
+        assert!(!is_on_niche("massive attack angel acapella", &terms));
+        assert!(!is_on_niche("best coffee grinders 2026", &terms));
+    }
+
+    proptest::proptest! {
+        // Property: empty term list accepts everything (legacy parity).
+        #[test]
+        fn empty_terms_accept_all(topic in "\\PC{0,80}") {
+            prop_assert!(is_on_niche(&topic, &[]));
+        }
+
+        // Property: case never flips a verdict (filter is case-insensitive).
+        #[test]
+        fn verdict_case_insensitive(
+            topic in "[a-zA-Z0-9 +\\-]{0,60}",
+            term in "[a-zA-Z]{1,10}",
+        ) {
+            let terms = vec![term.to_lowercase()];
+            let flipped: String = topic
+                .chars()
+                .map(|c| if c.is_ascii_alphabetic() {
+                    (c as u8 ^ 0x20) as char
+                } else {
+                    c
+                })
+                .collect();
+            prop_assert_eq!(
+                is_on_niche(&topic, &terms),
+                is_on_niche(&flipped, &terms)
+            );
+        }
+
+        // Property: no false accepts — a non-empty accept implies some term
+        // IS a case-insensitive substring of the topic.
+        #[test]
+        fn accept_implies_term_present(
+            topic in "[a-zA-Z0-9 +\\-]{0,60}",
+            t1 in "[a-z]{1,8}",
+            t2 in "[a-z]{1,8}",
+        ) {
+            let terms = vec![t1.clone(), t2];
+            let lower = topic.to_lowercase();
+            if is_on_niche(&topic, &terms) {
+                prop_assert!(
+                    terms.iter().any(|t| lower.contains(t.as_str())),
+                    "accepted {topic:?} without any matching term"
+                );
+            }
+        }
+
+        // Property: filtering is idempotent (A→B == A).
+        #[test]
+        fn filter_idempotent(
+            topics in proptest::collection::vec("[a-zA-Z0-9 +\\-]{0,30}", 0..20),
+            t in "[a-z]{1,8}",
+        ) {
+            let terms = vec![t];
+            let once: Vec<String> = topics
+                .iter()
+                .filter(|x| is_on_niche(x, &terms))
+                .cloned()
+                .collect();
+            let twice: Vec<String> = once
+                .iter()
+                .filter(|x| is_on_niche(x, &terms))
+                .cloned()
+                .collect();
+            prop_assert_eq!(once.len(), twice.len());
+        }
     }
 }

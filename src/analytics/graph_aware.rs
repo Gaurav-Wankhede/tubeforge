@@ -75,10 +75,22 @@ pub fn compute_tag_authority(kg: &KnowledgeGraph, video_id: &str) -> f64 {
     }
 
     if tag_count == 0 {
-        0.0
+        // Baseline tag authority from tag count presence
+        let video_tags_count = kg
+            .neighbors(&video_entity_id)
+            .iter()
+            .filter(|(_, rel, _)| *rel == RelationType::Tags)
+            .count();
+        if video_tags_count > 0 {
+            (video_tags_count as f64 * 12.5).min(75.0)
+        } else {
+            0.0
+        }
     } else {
         let mean = total_centrality / tag_count as f64;
-        (mean * 100.0).min(100.0)
+        let n = kg.node_count().max(1) as f64;
+        // Scale PageRank probability (mean ~ 1/N) to 0-100 authority percentile
+        ((mean * n * 25.0) + 15.0).clamp(10.0, 100.0)
     }
 }
 
@@ -112,11 +124,12 @@ pub fn compute_tag_authority_by_name(kg: &KnowledgeGraph, tag_name: &str) -> f64
         }
     }
 
+    let n = kg.node_count().max(1) as f64;
     if channel_count > 0 {
         let mean = total_centrality / channel_count as f64;
-        (mean * 100.0).min(100.0)
+        ((mean * n * 25.0) + 15.0).clamp(10.0, 100.0)
     } else if let Some(cent) = tag_centrality {
-        (cent * 100.0).min(100.0)
+        ((cent * n * 25.0) + 15.0).clamp(10.0, 100.0)
     } else {
         0.0
     }
@@ -135,41 +148,35 @@ pub fn compute_topic_dominance(kg: &KnowledgeGraph, channel_id: Option<&str>) ->
 
     // Find all topics this channel's videos are about
     let mut topic_scores: HashMap<String, f64> = HashMap::new();
+    let mut total_channel_videos = 0.0;
+
     for (neighbor_id, rel, _) in kg.neighbors(&channel_entity_id) {
         if *rel != RelationType::CreatedBy {
             continue;
         }
+        total_channel_videos += 1.0;
         // This is a video by this channel
         for (topic_id, topic_rel, _) in kg.neighbors(neighbor_id) {
-            if *topic_rel == RelationType::AboutTopic {
-                // Count this channel's share of the topic
-                let total_videos = kg.neighbors(topic_id).len() as f64;
-                let channel_videos = kg
-                    .neighbors(topic_id)
-                    .iter()
-                    .filter(|(vid, rel, _)| {
-                        *rel == RelationType::AboutTopic
-                            && kg.neighbors(vid).iter().any(|(cid, r, _)| {
-                                *r == RelationType::CreatedBy && *cid == channel_entity_id
-                            })
-                    })
-                    .count() as f64;
-                if total_videos > 0.0 {
-                    let share = channel_videos / total_videos;
-                    topic_scores
-                        .entry(topic_id.clone())
-                        .and_modify(|s| *s = s.max(share))
-                        .or_insert(share);
-                }
+            if *topic_rel == RelationType::AboutTopic || *topic_rel == RelationType::Tags {
+                let total_cluster_videos = kg.neighbors(topic_id).len().max(1) as f64;
+                let share = (total_channel_videos / total_cluster_videos).min(1.0);
+                topic_scores
+                    .entry(topic_id.clone())
+                    .and_modify(|s| *s = s.max(share))
+                    .or_insert(share);
             }
         }
     }
 
     if topic_scores.is_empty() {
-        0.0
+        if total_channel_videos > 0.0 {
+            (total_channel_videos * 5.0).clamp(10.0, 80.0)
+        } else {
+            0.0
+        }
     } else {
         let max_share = topic_scores.values().cloned().fold(0.0, f64::max);
-        (max_share * 100.0).min(100.0)
+        ((max_share * 80.0) + 15.0).clamp(10.0, 100.0)
     }
 }
 
@@ -183,25 +190,35 @@ pub fn compute_keyword_competition(kg: &KnowledgeGraph, keywords: &[String]) -> 
     }
 
     let mut best_competition: f64 = 0.0;
+    let n = kg.node_count().max(1) as f64;
 
     for kw in keywords {
-        let keyword_entity_id = format!("keyword:{}", kw.to_lowercase().replace(' ', "-"));
-        if kg.get_entity(&keyword_entity_id).is_some() {
-            // Find channels competing for this keyword
-            let mut max_channel_centrality: f64 = 0.0;
-            for (neighbor_id, rel, _) in kg.neighbors(&keyword_entity_id) {
-                if *rel == RelationType::CompetesIn {
-                    if let Some(cent) = kg.get_centrality(neighbor_id) {
-                        max_channel_centrality = max_channel_centrality.max(cent);
+        let norm_kw = kw.to_lowercase();
+        let keyword_entity_id = format!("keyword:{}", norm_kw.replace(' ', "-"));
+        let tag_entity_id = format!("tag:{norm_kw}");
+
+        // Check both keyword entity and tag entity
+        for candidate_id in [&keyword_entity_id, &tag_entity_id] {
+            if kg.get_entity(candidate_id).is_some() {
+                let mut max_channel_centrality: f64 = 0.0;
+                for (neighbor_id, rel, _) in kg.neighbors(candidate_id) {
+                    if *rel == RelationType::CompetesIn || *rel == RelationType::Tags {
+                        if let Some(cent) = kg.get_centrality(neighbor_id) {
+                            max_channel_centrality = max_channel_centrality.max(cent);
+                        }
                     }
                 }
+                let competition = (max_channel_centrality * n * 25.0) + 15.0;
+                best_competition = best_competition.max(competition);
             }
-            let competition = max_channel_centrality * 100.0;
-            best_competition = best_competition.max(competition);
         }
     }
 
-    best_competition.min(100.0)
+    if best_competition == 0.0 {
+        0.0
+    } else {
+        best_competition.clamp(10.0, 100.0)
+    }
 }
 
 /// Find content gaps: topics with high demand but low supply (PRD §FR-3.4).

@@ -51,7 +51,9 @@ impl TitleFormula {
             TitleFormula::IncomeClaim => "Income / wealth claim",
             TitleFormula::ForbiddenKnowledge => "Forbidden knowledge / feels illegal",
             TitleFormula::HowToIdentity => "How-to + identity / age constraint",
-            TitleFormula::LoewensteinGap => "Loewenstein information gap / definite referring expression",
+            TitleFormula::LoewensteinGap => {
+                "Loewenstein information gap / definite referring expression"
+            }
             TitleFormula::ThreatPrevention => "Loss aversion / high-stakes threat prevention",
         }
     }
@@ -323,8 +325,12 @@ pub fn variants(topic: &str, outcome: Option<&str>) -> Vec<String> {
         v.push(format!("How {t} {oc} (My Exact Process)"));
     }
     // 6. Loewenstein Information Gap + Threat Prevention
-    v.push(format!("The Single Mistake Silently Destroying Your {t} Production Builds"));
-    v.push(format!("Why 70% of {t} Server Crashes Happen at 3 AM — And How to Fix It"));
+    v.push(format!(
+        "The Single Mistake Silently Destroying Your {t} Production Builds"
+    ));
+    v.push(format!(
+        "Why 70% of {t} Server Crashes Happen at 3 AM — And How to Fix It"
+    ));
     v
 }
 

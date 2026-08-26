@@ -303,6 +303,7 @@ fn test_config(dir: &Path) -> Config {
         ytdlp_client: None,
         ytdlp_js_runtime: None,
         own_channel: None,
+        niche_terms: Vec::new(),
     }
 }
 

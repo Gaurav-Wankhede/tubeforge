@@ -33,13 +33,16 @@ TubeForge is designed to operate locally without cloud dependencies, external da
 ## Core Engineering Features
 
 - **Local-First & Private**: Zero external database servers, SaaS scrapers, or third-party analytics trackers. All channel intelligence, keyword indices, and draft metadata remain on your local machine.
-- **Embedded `tfdb` Storage Engine**: A crash-safe, write-ahead-log (`.wal` + `.dat`) storage system implemented in pure Rust without SQLite, PostgreSQL, or C runtime dependencies.
-- **Mathematical SEO & GEO Scoring**: Computes an 18-component SEO score and a 7-component Generative Engine Optimization (GEO) score against real-time BM25 index corpus baselines.
+- **Embedded `tfdb` Storage Engine**: A crash-safe, write-ahead-log (`.wal` + `.dat`) storage system implemented in pure Rust without SQLite, PostgreSQL, or C runtime dependencies, featuring atomic disk checkpointing and high-throughput batch writes.
+- **High-Performance Knowledge Graph**: In-memory graph construction, Louvain community detection (579 communities in 42ms), and weighted PageRank (790M ops/sec) with atomic batch persistence and sub-4-second warm graph scoring.
+- **Calibrated Mathematical SEO & GEO Scoring**: Computes an 18-component SEO score, a 7-component Generative Engine Optimization (GEO) score, and 3 Graph-Aware authority percentiles ($0\text{--}100$) against real-time BM25 index corpus baselines without artificial zero floors.
+- **Live Keyword Ranking Engine**: Automated position tracking across own and competitor videos, recording real-time SERP ranks, deltas, and keyword opportunity scores.
 - **Autonomous Greedy Engine**: Discovers, qualifies, and tracks high-demand, low-competition video topics on autopilot using channel graph tags, competitor analytics, and search suggestion drift.
 - **Built-in Production Kanban Engine**: Native video production TODO and roadmap system interconnected directly with TubeForge's keyword research, SEO opportunity scores, and competitor SERP analytics across dual-channel taxonomy (`TECHVERSE` and `BOOKVERSE`).
 - **Embedded Web Dashboard**: Server-rendered UI on raw Hyper featuring Server-Sent Events (SSE) and WebSocket JSON-RPC channels with server-rendered inline SVGs and zero JavaScript framework dependencies.
 - **Agent-Native Protocol (`tubeforge rpc`)**: Direct stdio JSON-RPC protocol interface for AI coding harnesses (OpenCode, Claude Code, Codex, Hermes, Pi Agent) to query channel intelligence on demand.
 - **Deterministic Thumbnail Renderer**: Generates pixel-perfect 1280x720 PNG thumbnails from HTML/CSS templates via headless Chromium.
+- **Lazy Default-Evaluation Discipline**: Audited clean of eager-evaluation fallbacks (`clippy::or_fun_call`) — all `unwrap_or*` defaults on non-trivial values are lazy (`unwrap_or_else`), keeping clock reads, JSON construction, and string allocations off hot paths; recoverable data failures emit structured warnings instead of silently skewing analytics.
 
 ---
 
@@ -282,9 +285,14 @@ cargo test
 # Run compiler lints with warnings denied
 cargo clippy --all-targets -- -D warnings
 
+# Verify no eager-evaluation default-value calls (enforced codebase invariant)
+cargo clippy --all-targets -- -W clippy::or_fun_call
+
 # Check code formatting conformance
 cargo fmt --check
 ```
+
+The codebase maintains a zero-tolerance policy for eager evaluation in `unwrap_or`/`or` fallback positions: any default more expensive than a constant must be wrapped in a lazy closure (`unwrap_or_else`). Fallback semantics are chosen fail-safe — e.g., corrupt timestamps read as *unknown freshness* (epoch), never as *current*.
 
 ---
 

@@ -304,8 +304,9 @@ async fn score_detail_api(
         .map(|v| v.title.clone())
         .unwrap_or_else(|| id.clone());
 
-    let components: Value =
-        serde_json::from_str(&score.components).unwrap_or(Value::Object(Default::default()));
+    // Corrupt component JSON renders as empty rather than failing the page.
+    let components: Value = serde_json::from_str(&score.components)
+        .unwrap_or_else(|_| Value::Object(Default::default()));
 
     let mut seo_components = HashMap::new();
     for k in &SEO_COMPONENT_KEYS {
@@ -495,11 +496,11 @@ async fn videos_api(
                 "total_score" | "score" => {
                     let a_s = a["total_score"]
                         .as_f64()
-                        .or(a["seo_score"].as_f64())
+                        .or_else(|| a["seo_score"].as_f64())
                         .unwrap_or(0.0);
                     let b_s = b["total_score"]
                         .as_f64()
-                        .or(b["seo_score"].as_f64())
+                        .or_else(|| b["seo_score"].as_f64())
                         .unwrap_or(0.0);
                     compare_f64(a_s, b_s)
                 }
@@ -846,8 +847,10 @@ async fn keywords_history_api(
                 "competition_score": r.competition_score,
                 "opportunity_score": r.opportunity_score,
                 "actively_published": r.actively_published,
-                "suggested_tags": serde_json::from_str::<Value>(&r.suggested_tags).unwrap_or(Value::Array(vec![])),
-                "related_keywords": serde_json::from_str::<Value>(&r.related_keywords).unwrap_or(Value::Array(vec![])),
+                "suggested_tags": serde_json::from_str::<Value>(&r.suggested_tags)
+                    .unwrap_or_else(|_| Value::Array(Vec::new())),
+                "related_keywords": serde_json::from_str::<Value>(&r.related_keywords)
+                    .unwrap_or_else(|_| Value::Array(Vec::new())),
             })
         })
         .collect();

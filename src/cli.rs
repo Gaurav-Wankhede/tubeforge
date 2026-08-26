@@ -340,6 +340,33 @@ pub enum KanbanKind {
         #[arg(long, value_name = "ID")]
         video_id: Option<String>,
     },
+    /// Update/edit a Kanban ticket's metadata (title, topic, framework, keyword, notes).
+    Update {
+        /// Ticket ID (e.g. ticket-abc12345).
+        #[arg(value_name = "TICKET_ID")]
+        ticket_id: String,
+        /// New title.
+        #[arg(long, value_name = "TITLE")]
+        title: Option<String>,
+        /// New status.
+        #[arg(long, value_name = "STATUS")]
+        status: Option<String>,
+        /// New topic.
+        #[arg(long, value_name = "TOPIC")]
+        topic: Option<String>,
+        /// New framework.
+        #[arg(long, value_name = "FRAMEWORK")]
+        framework: Option<String>,
+        /// New duration in seconds.
+        #[arg(long, value_name = "SECS")]
+        duration: Option<i64>,
+        /// New target keyword.
+        #[arg(long, value_name = "KW")]
+        keyword: Option<String>,
+        /// New notes.
+        #[arg(long, value_name = "NOTES")]
+        notes: Option<String>,
+    },
     /// Show full details of a ticket and its interconnected research.
     Show {
         /// Ticket ID.
@@ -678,6 +705,7 @@ impl Cli {
                 KanbanKind::FromResearch { .. } => "kanban from-research",
                 KanbanKind::List { .. } => "kanban list",
                 KanbanKind::Move { .. } => "kanban move",
+                KanbanKind::Update { .. } => "kanban update",
                 KanbanKind::Show { .. } => "kanban show",
                 KanbanKind::Delete { .. } => "kanban delete",
                 KanbanKind::Prompt { .. } => "kanban prompt",

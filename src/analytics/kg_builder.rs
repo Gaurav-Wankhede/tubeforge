@@ -71,21 +71,24 @@ pub async fn build(db: &Db, mode: BuildMode) -> Result<BuildStats, TubeforgeErro
     create_channel_competition_relations(&mut kg, &edges);
     create_keyword_ranking_relations(&mut kg, db).await?;
 
-    // Step 3: Persist to database (idempotent)
-    persist_entities(db, &kg, mode).await?;
-    persist_relations(db, &kg, mode).await?;
-
-    stats.entities_created = kg.node_count();
-    stats.relations_created = kg.edge_count();
-
-    // Step 4: Run analytics
+    // Step 3: Run analytics in memory
     let communities = crate::analytics::kg_algorithms::louvain_communities(&kg);
     let centrality = crate::analytics::kg_algorithms::pagerank(&kg);
 
-    // Persist communities and centrality
-    persist_communities(db, &kg, &communities, mode).await?;
-    update_centrality(db, &kg, &centrality).await?;
+    for (id, entity) in kg.entities.iter_mut() {
+        if let Some(&c) = communities.get(id) {
+            entity.community_id = Some(c);
+        }
+        if let Some(&p) = centrality.get(id) {
+            entity.centrality = Some(p);
+        }
+    }
 
+    // Step 4: Persist to database in a single fast batch (idempotent)
+    persist_batch(db, &kg, &communities, mode).await?;
+
+    stats.entities_created = kg.node_count();
+    stats.relations_created = kg.edge_count();
     stats.communities_detected = communities
         .values()
         .collect::<std::collections::HashSet<_>>()
@@ -100,17 +103,13 @@ pub async fn build(db: &Db, mode: BuildMode) -> Result<BuildStats, TubeforgeErro
 /// Used at startup to avoid rebuilding from scratch. If the cached KG is
 /// missing or stale, falls back to a full rebuild.
 pub async fn load_or_build(db: &Db) -> Result<KnowledgeGraph, TubeforgeError> {
-    // Try to load from cache first
-    if let Some(cached) = db.meta_get("kg_cache_json").await? {
-        if let Ok(kg) = serde_json::from_str::<KnowledgeGraph>(&cached) {
-            if !kg.is_empty() {
-                return Ok(kg);
-            }
-        }
+    // 1. Try to load from database tables if already populated
+    let existing_entities = db.list_kg_entities().await?;
+    if !existing_entities.is_empty() {
+        return load_from_db(db).await;
     }
-    // Cache miss — build from scratch
+    // 2. Otherwise build from scratch
     build(db, BuildMode::Full).await?;
-    // Load the freshly built KG
     load_from_db(db).await
 }
 
@@ -381,9 +380,10 @@ async fn create_keyword_ranking_relations(
 // Persistence (idempotent)
 // ---------------------------------------------------------------------------
 
-async fn persist_entities(
+async fn persist_batch(
     db: &Db,
     kg: &KnowledgeGraph,
+    communities: &HashMap<String, i64>,
     mode: BuildMode,
 ) -> Result<(), TubeforgeError> {
     if mode == BuildMode::Full {
@@ -392,53 +392,35 @@ async fn persist_entities(
             .await?;
     }
 
-    for entity in kg.entities.values() {
-        let props_json = serde_json::to_string(&entity.properties).unwrap_or_default();
-        db.persist_kg_entity(
-            &entity.entity_id,
-            entity.entity_type.prefix(),
-            &entity.canonical_name,
-            &entity.display_name,
-            &props_json,
-            entity.centrality,
-            entity.community_id,
-            &entity.source,
-            &entity.source_ref,
-        )
-        .await?;
-    }
-    Ok(())
-}
+    let entities: Vec<crate::storage::db::KgEntityRow> = kg
+        .entities
+        .values()
+        .map(|e| crate::storage::db::KgEntityRow {
+            entity_id: e.entity_id.clone(),
+            entity_type: e.entity_type.prefix().to_string(),
+            canonical_name: e.canonical_name.clone(),
+            display_name: e.display_name.clone(),
+            properties: serde_json::to_string(&e.properties).unwrap_or_default(),
+            centrality: e.centrality,
+            community_id: e.community_id,
+            source: e.source.clone(),
+            source_ref: e.source_ref.clone(),
+        })
+        .collect();
 
-async fn persist_relations(
-    db: &Db,
-    kg: &KnowledgeGraph,
-    _mode: BuildMode,
-) -> Result<(), TubeforgeError> {
+    let mut relations: Vec<crate::storage::db::KgRelationRow> = Vec::new();
     for (from, edges) in &kg.adjacency {
         for (to, rel_type, weight) in edges {
-            db.persist_kg_relation(from, to, &rel_type.to_string(), *weight, "system")
-                .await?;
+            relations.push(crate::storage::db::KgRelationRow {
+                from_entity: from.clone(),
+                to_entity: to.clone(),
+                relation_type: rel_type.to_string(),
+                weight: *weight,
+                source: "system".to_string(),
+            });
         }
     }
-    Ok(())
-}
 
-async fn persist_communities(
-    db: &Db,
-    _kg: &KnowledgeGraph,
-    communities: &HashMap<String, i64>,
-    _mode: BuildMode,
-) -> Result<(), TubeforgeError> {
-    // Communities are always fully recomputed (derived data).
-    db.clear_kg(&["kg_communities"]).await?;
-
-    // Update entity community_id references.
-    for (entity_id, comm_id) in communities {
-        db.update_entity_community(entity_id, *comm_id).await?;
-    }
-
-    // Aggregate community stats.
     let mut comm_members: HashMap<i64, Vec<String>> = HashMap::new();
     for (entity_id, comm_id) in communities {
         comm_members
@@ -447,23 +429,29 @@ async fn persist_communities(
             .push(entity_id.clone());
     }
 
+    let mut community_rows: Vec<crate::storage::db::KgCommunityRow> = Vec::new();
     for (comm_id, members) in &comm_members {
-        let member_json = serde_json::to_string(&members).unwrap_or_default();
-        db.persist_kg_community(*comm_id, members.len() as i64, &member_json)
-            .await?;
+        let mut top_members = members.clone();
+        top_members.sort_by(|a, b| {
+            let ca = kg.entities.get(a).and_then(|e| e.centrality).unwrap_or(0.0);
+            let cb = kg.entities.get(b).and_then(|e| e.centrality).unwrap_or(0.0);
+            cb.partial_cmp(&ca).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        top_members.truncate(5);
+
+        community_rows.push(crate::storage::db::KgCommunityRow {
+            community_id: *comm_id,
+            community_type: "mixed".to_string(),
+            member_count: members.len() as i64,
+            top_entities: serde_json::to_string(&top_members).unwrap_or_default(),
+            created_at: crate::util::now_rfc3339(),
+            updated_at: crate::util::now_rfc3339(),
+        });
     }
 
-    Ok(())
-}
+    db.persist_kg_batch(&entities, &relations, &community_rows)
+        .await?;
 
-async fn update_centrality(
-    db: &Db,
-    _kg: &KnowledgeGraph,
-    centrality: &HashMap<String, f64>,
-) -> Result<(), TubeforgeError> {
-    for (entity_id, score) in centrality {
-        db.update_entity_centrality(entity_id, *score).await?;
-    }
     Ok(())
 }
 

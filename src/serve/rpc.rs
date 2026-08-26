@@ -682,7 +682,9 @@ async fn handle_scores_detail(
     let scorer = RuntimeScorer::new(&state.data_dir, keywords);
 
     // Prefer a fresh runtime score; fall back to the stored breakdown.
-    let (seo_total, geo_total, total, seo_components, geo_components) = match scorer.score(video) {
+    let (seo_total, geo_total, total, mut seo_components, geo_components) = match scorer
+        .score(video)
+    {
         Some(r) => {
             let mut seo = HashMap::new();
             if let Value::Object(m) = &r.seo_components {
@@ -735,6 +737,18 @@ async fn handle_scores_detail(
     // Compute graph-aware scores from the Knowledge Graph (internal enhancement).
     let graph_scores = compute_graph_scores_for_video(state, id, video).await;
 
+    if let Value::Object(ref g) = graph_scores {
+        if let Some(v) = g.get("tag_authority").and_then(|v| v.as_f64()) {
+            seo_components.insert("tag_authority".to_string(), v);
+        }
+        if let Some(v) = g.get("topic_dominance").and_then(|v| v.as_f64()) {
+            seo_components.insert("topic_dominance".to_string(), v);
+        }
+        if let Some(v) = g.get("keyword_competition").and_then(|v| v.as_f64()) {
+            seo_components.insert("keyword_competition".to_string(), v);
+        }
+    }
+
     Ok(json!({
         "video_id":       id,
         "title":          title,
@@ -775,14 +789,19 @@ async fn compute_graph_scores_for_video(
 }
 
 /// Score every video that currently lacks a stored score, streaming progress.
-/// This is the one-time backfill so the fast list view has fresh stored
+/// Score every video that currently lacks a stored score (or all videos if `force: true`), streaming progress.
+/// This is the backfill so the fast list view has fresh stored
 /// scores for all videos (not just the ones collected via search).
 async fn handle_scores_backfill(
     state: &AppState,
     sender: &RpcSender,
-    _params: &HashMap<String, Value>,
+    params: &HashMap<String, Value>,
 ) -> Result<Value, TubeforgeError> {
-    progress(sender, &Value::Null, 0.05, "Loading videos...").await;
+    let force = params
+        .get("force")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    progress(sender, &Value::Null, 0.05, "Loading videos and keywords...").await;
     let videos = state.db.all_videos().await?;
     let keywords: Vec<String> = state
         .db
@@ -793,19 +812,23 @@ async fn handle_scores_backfill(
         .collect();
     let scorer = RuntimeScorer::new(&state.data_dir, keywords);
 
-    let stored: std::collections::HashSet<String> = state
-        .db
-        .all_scores()
-        .await?
-        .into_iter()
-        .map(|s| s.video_id)
-        .collect();
+    let stored: std::collections::HashSet<String> = if force {
+        std::collections::HashSet::new()
+    } else {
+        state
+            .db
+            .all_scores()
+            .await?
+            .into_iter()
+            .map(|s| s.video_id)
+            .collect()
+    };
 
-    let unscored: Vec<&VideoRow> = videos
+    let target_videos: Vec<&VideoRow> = videos
         .iter()
         .filter(|v| !stored.contains(&v.video_id))
         .collect();
-    let total = unscored.len();
+    let total = target_videos.len();
     if total == 0 {
         return Ok(json!({ "scored": 0, "total": 0, "done": true }));
     }
@@ -817,28 +840,27 @@ async fn handle_scores_backfill(
         &format!("Scoring {total} videos at runtime..."),
     )
     .await;
-    let mut scored = 0usize;
-    for (i, v) in unscored.iter().enumerate() {
+
+    let mut batch: Vec<(String, f64, f64, f64, String)> = Vec::with_capacity(total);
+    for (i, v) in target_videos.iter().enumerate() {
         if let Some(r) = scorer.score(v) {
-            let _ = state
-                .db
-                .upsert_score(
-                    &v.video_id,
-                    r.seo_total,
-                    r.geo_total,
-                    r.total,
-                    &r.components_flat.to_string(),
-                )
-                .await;
-            scored += 1;
+            batch.push((
+                v.video_id.clone(),
+                r.seo_total,
+                r.geo_total,
+                r.total,
+                r.components_flat.to_string(),
+            ));
         }
-        // Stream progress every 10 videos (avoid flooding the socket).
-        if i % 10 == 0 {
-            let pct = 0.10 + (i as f32 / total as f32) * 0.85;
+        if i % 50 == 0 {
+            let pct = 0.10 + (i as f32 / total as f32) * 0.80;
             progress(sender, &Value::Null, pct, &format!("Scored {i}/{total}")).await;
         }
     }
-    progress(sender, &Value::Null, 0.95, "Backfill complete").await;
+
+    let scored = batch.len();
+    state.db.upsert_scores_batch(&batch).await?;
+    progress(sender, &Value::Null, 1.0, "Backfill complete").await;
 
     Ok(json!({ "scored": scored, "total": total, "done": true }))
 }

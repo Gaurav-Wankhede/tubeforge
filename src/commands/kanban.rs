@@ -27,11 +27,7 @@ pub struct CreateTicketInput {
 pub async fn run_create(cfg: &Config, input: &CreateTicketInput) -> Result<Value, TubeforgeError> {
     let db = Db::open(&cfg.db_path).await?;
     let now = crate::util::now_rfc3339();
-    let status = input
-        .status
-        .as_deref()
-        .unwrap_or("todo")
-        .to_lowercase();
+    let status = input.status.as_deref().unwrap_or("todo").to_lowercase();
     let ticket_id = format!("ticket-{}", &crate::util::nanoid(8));
 
     let ticket = KanbanTicketRow {
@@ -73,16 +69,24 @@ pub async fn run_from_research(
 
     // Query existing research from `keyword_research` table
     let research_opt = db.get_keyword_research(topic).await?;
-    let (target_kw, title, suggested_tags_count) = if let Some(r) = &research_opt {
-        let default_title = format!("{}: Visual Breakdown & Mental Model", r.keyword);
-        let title = title_override.unwrap_or(&default_title).to_string();
-        let tags: Vec<Value> = serde_json::from_str(&r.suggested_tags).unwrap_or_default();
-        (Some(r.keyword.clone()), title, tags.len())
-    } else {
-        let default_title = format!("{topic}: Visual Breakdown & Mental Model");
-        let title = title_override.unwrap_or(&default_title).to_string();
-        (Some(topic.to_string()), title, 0)
+    // Build the fallback title only when no override was given — the old code
+    // allocated the default eagerly on every call. Titles follow the house
+    // style law: no "Topic: Subtitle" colon patterns.
+    let title = match title_override {
+        Some(t) => t.to_string(),
+        None => match &research_opt {
+            Some(r) => format!("{} — Visual Breakdown & Mental Model", r.keyword),
+            None => format!("{topic} — Visual Breakdown & Mental Model"),
+        },
     };
+    let target_kw = Some(match &research_opt {
+        Some(r) => r.keyword.clone(),
+        None => topic.to_string(),
+    });
+    let suggested_tags_count = research_opt
+        .as_ref()
+        .and_then(|r| serde_json::from_str::<Vec<Value>>(&r.suggested_tags).ok())
+        .map_or(0, |tags| tags.len());
 
     let ticket_id = format!("ticket-{}", &crate::util::nanoid(8));
     let ticket = KanbanTicketRow {
@@ -166,6 +170,32 @@ pub async fn run_move(
     Ok(json!({
         "ticket": updated,
         "message": format!("Ticket {} status updated to '{}'", ticket_id, status)
+    }))
+}
+
+/// Update fields on an existing Kanban ticket.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_update(
+    cfg: &Config,
+    ticket_id: &str,
+    title: Option<&str>,
+    status: Option<&str>,
+    topic: Option<&str>,
+    framework: Option<&str>,
+    duration: Option<i64>,
+    keyword: Option<&str>,
+    notes: Option<&str>,
+) -> Result<Value, TubeforgeError> {
+    let db = Db::open(&cfg.db_path).await?;
+    let updated = db
+        .update_kanban_ticket_fields(
+            ticket_id, title, status, topic, framework, duration, keyword, notes,
+        )
+        .await?;
+
+    Ok(json!({
+        "ticket": updated,
+        "message": format!("Ticket {} updated successfully", ticket_id)
     }))
 }
 

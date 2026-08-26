@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-08-26
+
+### Fixed & Optimized
+
+- **Knowledge Graph Performance & Batching (74.6x Speedup)**:
+  - Replaced single-row database writes with atomic batch persistence (`persist_kg_batch`), reducing Knowledge Graph construction and persistence time from **4m40s (280s)** down to **3.75s** across 1,644 entities and 159,148 relations.
+  - Added `load_or_build()` cache validation to eliminate redundant graph rebuilds on RPC requests.
+- **Graph-Aware Multi-Dimensional Scoring Calibration**:
+  - Calibrated PageRank probability distribution scaling ($P \times |V| \times 25.0$) to produce granular, non-zero percentiles ($0\text{--}100$) for `tag_authority`, `topic_dominance`, and `keyword_competition`.
+  - Added multi-candidate tag and keyword resolution to prevent string formatting mismatches.
+- **Atomic Database Checkpointing in `tfdb`**:
+  - Added automatic `eng.checkpoint()?` to all keyword, ranking, score, and research mutation functions (`add_keywords`, `upsert_ranking`, `upsert_score`, `upsert_keyword_research`), preventing unpersisted WAL data loss on subsequent reads.
+- **Full Corpus Batch Recalculation Engine**:
+  - Added `upsert_scores_batch` in `db_tf.rs` for lightning-fast multi-row score transactions.
+  - Extended `scores.backfill` RPC method with `force: true` parameter, recalculating all 1,065 videos across the catalog in **$< 6\text{ seconds}$**.
+- **Keyword Ranking Engine Synchronization**:
+  - Integrated 14 production target keywords into the live ranking engine.
+  - Calculated exact ranking positions, deltas, and SERP competition against own vs competitor videos.
+- **100% Test Suite Verification**:
+  - All 319 unit, integration, and property tests passing cleanly.
+- **`unwrap_or*` Default-Value Audit (Rust Best Practices)**:
+  - Eliminated all 15 eager-evaluation sites flagged by Clippy `or_fun_call` across the analytics, serve, and command layers — expensive fallbacks (`Utc::now()`, JSON object/array construction, string clones, `format!` titles) now evaluate lazily via `unwrap_or_else` closures, keeping allocation off the happy path.
+  - **Correctness fix**: unparsable channel `fetched_at` timestamps fell back to `Utc::now()`, silently hiding stale channels from health checks and alerts; they now fall back to `UNIX_EPOCH`, so unknown freshness surfaces as stale (fail-safe).
+  - **Error visibility**: `videos dedupe` no longer swallows database count errors (`unwrap_or(0)` → `?`); failed keyword-recency probes and corpus-resonance reads in `analyze` now emit `tracing::warn` diagnostics instead of silently reading as zero signal; `backup` logs snapshot stat failures with path and cause.
+  - Kanban default ticket titles are allocated only when no `--title` override is given, and follow the house no-colon title style (`keyword — Visual Breakdown & Mental Model`).
+  - Unified `home_dir()` fallback in config loading (`.`, matching `Config::defaults()`, instead of an empty `PathBuf`).
+- **Test Suite Restoration**:
+  - Added the missing `niche_terms` field to `Config` initializers in the `phase1`–`phase3` and `perf_gate` integration suites; removed dead imports from `real_kg_benchmark`. All targets now compile warning-free: 319 lib tests, 18 serve tests, and 30 phase tests passing.
+
 ## [0.2.0] - 2026-08-25
 
 ### Added

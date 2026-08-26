@@ -26,9 +26,9 @@ fn pid_path(cfg: &Config) -> PathBuf {
 fn write_pid(cfg: &Config) -> Result<(), TubeforgeError> {
     let path = pid_path(cfg);
     let pid = std::process::id();
-    std::fs::write(&path, pid.to_string()).map_err(|e| TubeforgeError::Usage(format!(
-        "failed to write PID file {}: {e}", path.display()
-    )))?;
+    std::fs::write(&path, pid.to_string()).map_err(|e| {
+        TubeforgeError::Usage(format!("failed to write PID file {}: {e}", path.display()))
+    })?;
     Ok(())
 }
 
@@ -47,7 +47,7 @@ fn read_pid(cfg: &Config) -> Option<u32> {
 pub async fn run_research(cfg: &Config, max: usize) -> Result<Value, TubeforgeError> {
     let db = Db::open(&cfg.db_path).await?;
     let clients = FetchClients::new()?;
-    let candidates = topic_generator::generate_candidates(&db, &clients).await?;
+    let candidates = topic_generator::generate_candidates(&db, &clients, &cfg.niche_terms).await?;
     let cooldown_hours = None; // default 24h
     let mut researched = Vec::new();
     let mut skipped = Vec::new();
