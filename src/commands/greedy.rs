@@ -338,9 +338,9 @@ pub async fn run_stop(cfg: &Config) -> Result<Value, TubeforgeError> {
 
     #[cfg(not(unix))]
     {
-        return Err(TubeforgeError::Usage(
+        Err(TubeforgeError::Usage(
             "greedy stop is only supported on Unix".into(),
-        ));
+        ))
     }
 
     #[cfg(unix)]
