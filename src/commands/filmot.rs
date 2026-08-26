@@ -46,7 +46,7 @@ pub async fn run_get(video_id: &str) -> Result<Value, TubeforgeError> {
 
     let url = Url::parse_with_params(
         FILMOT_API,
-        &[("id", video_id), ("flags", "1"), ("key", &key)],
+        [("id", video_id), ("flags", "1"), ("key", &key)],
     )
     .map_err(|e| TubeforgeError::Fetch {
         src: Source::Api,

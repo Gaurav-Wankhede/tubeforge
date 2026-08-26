@@ -51,7 +51,7 @@ pub async fn fetch(clients: &FetchClients, video_id: &str) -> Result<OEmbed, Tub
     let watch = format!("https://www.youtube.com/watch?v={video_id}");
     let url = Url::parse_with_params(
         &format!("{}/oembed", clients.oembed_base),
-        &[("url", watch.as_str()), ("format", "json")],
+        [("url", watch.as_str()), ("format", "json")],
     )
     .map_err(|e| TubeforgeError::Fetch {
         src: Source::OEmbed,

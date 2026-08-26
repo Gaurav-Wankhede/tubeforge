@@ -336,12 +336,6 @@ pub async fn run_stop(cfg: &Config) -> Result<Value, TubeforgeError> {
         )));
     }
 
-    #[cfg(unix)]
-    {
-        unsafe {
-            libc::kill(pid as i32, libc::SIGTERM);
-        }
-    }
     #[cfg(not(unix))]
     {
         return Err(TubeforgeError::Usage(
@@ -349,19 +343,25 @@ pub async fn run_stop(cfg: &Config) -> Result<Value, TubeforgeError> {
         ));
     }
 
-    // Wait briefly for the process to exit.
-    for _ in 0..50 {
-        if !is_alive(pid) {
-            remove_pid(cfg);
-            return Ok(json!({ "stopped": true, "pid": pid }));
+    #[cfg(unix)]
+    {
+        unsafe {
+            libc::kill(pid as i32, libc::SIGTERM);
         }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
+        // Wait briefly for the process to exit.
+        for _ in 0..50 {
+            if !is_alive(pid) {
+                remove_pid(cfg);
+                return Ok(json!({ "stopped": true, "pid": pid }));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
 
-    Err(TubeforgeError::Usage(format!(
-        "sent SIGTERM to PID {pid}, but process did not exit within 5s. \
-         Check manually: kill {pid}"
-    )))
+        Err(TubeforgeError::Usage(format!(
+            "sent SIGTERM to PID {pid}, but process did not exit within 5s. \
+             Check manually: kill {pid}"
+        )))
+    }
 }
 
 /// Check if a process with the given PID is alive.

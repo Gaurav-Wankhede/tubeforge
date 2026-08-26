@@ -164,7 +164,7 @@ impl ApiClient {
     ) -> Result<Vec<AvailabilityItem>, TubeforgeError> {
         let url = Url::parse_with_params(
             &format!("{}/videos", self.clients.api_base),
-            &[
+            [
                 ("part", AVAILABILITY_PART),
                 ("id", &ids.join(",")),
                 ("fields", AVAILABILITY_FIELDS),
@@ -244,7 +244,7 @@ impl ApiClient {
     pub async fn resolve_handle(&self, handle: &str) -> Result<String, TubeforgeError> {
         let url = Url::parse_with_params(
             &format!("{}/channels", self.clients.api_base),
-            &[
+            [
                 ("part", "id,snippet"),
                 ("forHandle", handle),
                 ("fields", CHANNELS_FIELDS),
@@ -386,7 +386,7 @@ impl ApiClient {
     async fn request_videos(&self, ids: &[String]) -> Result<ApiVideosResponse, TubeforgeError> {
         let url = Url::parse_with_params(
             &format!("{}/videos", self.clients.api_base),
-            &[
+            [
                 ("part", PART),
                 ("id", &ids.join(",")),
                 ("fields", FIELDS),
