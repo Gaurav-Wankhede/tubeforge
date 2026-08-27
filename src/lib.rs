@@ -16,12 +16,12 @@ pub mod export;
 pub mod fetch;
 pub mod ingest;
 pub mod output;
+pub mod playbook;
 pub mod scoring;
 pub mod search;
 pub mod serve;
 pub mod storage;
 pub mod tfdb;
-pub mod thumbnail;
 pub mod util;
 
 // Re-export the flexible query API for convenience

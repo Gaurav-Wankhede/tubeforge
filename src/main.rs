@@ -6,7 +6,7 @@ use std::time::Instant;
 use clap::Parser;
 use tubeforge::cli::{
     CheckKind, Cli, Command, CommentsKind, ExportFormat as CliExportFormat, FilmotKind, GreedyKind,
-    IngestKind, KanbanKind, KeywordsKind, SeedsAction, TagsKind, ThumbnailKind, TranscriptKind,
+    IngestKind, KanbanKind, KeywordsKind, PlaybookKind, SeedsAction, TagsKind, TranscriptKind,
 };
 use tubeforge::commands;
 use tubeforge::config;
@@ -205,7 +205,11 @@ async fn dispatch(cli: &Cli) -> Result<(serde_json::Value, Option<QuotaInfo>), T
             TranscriptKind::List => commands::transcript::run_list(&cfg).await?,
             TranscriptKind::Clear => commands::transcript::run_clear(&cfg).await?,
         },
-        Command::Metadata { video_id } => commands::metadata::run(&cfg, video_id).await?,
+        Command::Metadata {
+            video_id,
+            all,
+            limit,
+        } => commands::metadata::run(&cfg, video_id.clone(), *all, *limit).await?,
         Command::Comments { kind } => match kind {
             CommentsKind::Get { video_id, max, api } => {
                 commands::comments::run_get(&cfg, video_id, *max, *api).await?
@@ -235,28 +239,6 @@ async fn dispatch(cli: &Cli) -> Result<(serde_json::Value, Option<QuotaInfo>), T
         Command::Reindex => commands::reindex::run(&cfg).await?,
         Command::Backup { to } => commands::backup::run(&cfg, to.clone()).await?,
         Command::Quota => commands::quota::run(&cfg).await?,
-        Command::Thumbnail { kind } => match kind {
-            ThumbnailKind::Render {
-                video_id,
-                draft_title,
-                template,
-                out,
-                keep_assets,
-            } => {
-                commands::thumbnail::run_render(
-                    &cfg,
-                    &commands::thumbnail::RenderInput {
-                        video_id: video_id.clone(),
-                        draft_title: draft_title.clone(),
-                        template: template.clone(),
-                        out: out.clone(),
-                        keep_assets: *keep_assets,
-                    },
-                )
-                .await?
-            }
-            ThumbnailKind::ListTemplates => commands::thumbnail::run_list_templates().await?,
-        },
         Command::Check { kind } => match kind {
             CheckKind::Availability { video_id } => {
                 commands::availability::run(&cfg, video_id).await?
@@ -404,6 +386,20 @@ async fn dispatch(cli: &Cli) -> Result<(serde_json::Value, Option<QuotaInfo>), T
             KanbanKind::Prompt { ticket_id } => {
                 commands::kanban::run_prompt(&cfg, ticket_id).await?
             }
+        },
+        Command::Playbook { kind } => match kind {
+            PlaybookKind::Score {
+                title,
+                description,
+                hook,
+            } => commands::playbook::run_score(title, description.as_deref(), hook.as_deref())?,
+            PlaybookKind::Contract {
+                channel,
+                topic,
+                keyword,
+                title,
+                framework,
+            } => commands::playbook::run_contract(channel, topic, keyword, title, framework)?,
         },
         // Serve never reaches the envelope pipeline (special-cased in run()).
         Command::Serve { .. } => unreachable!("serve is handled before dispatch"),

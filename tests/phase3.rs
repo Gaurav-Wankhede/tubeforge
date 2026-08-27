@@ -19,7 +19,6 @@ fn test_config(dir: &Path) -> Config {
         log_level: "info".to_string(),
         youtube_api_key: Some("test-key".to_string()),
         quota_warn_at: 90,
-        chromium_dir: dir.join("chromium"),
         ytdlp_path: "yt-dlp".into(),
         ytdlp_enabled: false,
         ytdlp_client: None,
@@ -392,9 +391,8 @@ async fn p3_check_availability_requires_key() {
 
 #[tokio::test]
 async fn p3_filmot_get_requires_key() {
-    // The key env is process-global; this crate's tests are the only users
-    // of TUBEFORGE_FILMOT_KEY, so removing it here cannot race anything.
-    std::env::remove_var(filmot::FILMOT_KEY_ENV);
+    // SAFETY: test-only environment variable cleanup.
+    unsafe { std::env::remove_var(filmot::FILMOT_KEY_ENV); }
     let err = filmot::run_get("dQw4w9WgXcQ")
         .await
         .expect_err("no key → error");

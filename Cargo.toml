@@ -1,7 +1,7 @@
 [package]
 name = "tubeforge"
-version = "2.1.0"
-edition = "2021"
+version = "0.2.2"
+edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.85"
 description = "Local-first YouTube SEO/GEO growth engine — RSS/oEmbed/API ingest, BM25 scoring, analytics, thumbnail generation. CLI-first, agent-ready."
@@ -11,8 +11,6 @@ repository = "https://github.com/Gaurav-Wankhede/tubeforge"
 
 [dependencies]
 askama = "0.14"
-chromiumoxide = { version = "0.9.1", features = ["fetcher"] }
-chromiumoxide_fetcher = "0.9.1"
 chrono = { version = "0.4.45", features = ["serde"] }
 chrono-tz = "0.10.4"
 clap = { version = "4.6.5", features = ["derive"] }

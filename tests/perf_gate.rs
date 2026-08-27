@@ -297,7 +297,6 @@ fn test_config(dir: &Path) -> Config {
         log_level: "info".to_string(),
         youtube_api_key: None,
         quota_warn_at: 90,
-        chromium_dir: dir.join("chromium"),
         ytdlp_path: "yt-dlp".into(),
         ytdlp_enabled: false,
         ytdlp_client: None,

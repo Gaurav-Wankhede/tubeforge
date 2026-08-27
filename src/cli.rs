@@ -104,8 +104,14 @@ pub enum Command {
     /// live stats, channel followers — persisted for stored videos.
     Metadata {
         /// The 11-char YouTube video id.
-        #[arg(long, value_name = "ID", required = true)]
-        video_id: String,
+        #[arg(long, value_name = "ID")]
+        video_id: Option<String>,
+        /// Enrich all unenriched stored videos in batch.
+        #[arg(long)]
+        all: bool,
+        /// Max videos to enrich in batch.
+        #[arg(long)]
+        limit: Option<usize>,
     },
     /// Fetch top-level comments via commentThreads.list (quota-guarded).
     Comments {
@@ -187,11 +193,6 @@ pub enum Command {
     },
     /// Show YouTube API usage from the meta ledger.
     Quota,
-    /// Generate thumbnails from HTML+Tailwind templates (Phase 3, PRD §5.7).
-    Thumbnail {
-        #[command(subcommand)]
-        kind: ThumbnailKind,
-    },
     /// Detect tracked videos that went private/deleted; snapshot
     /// privacyStatus (Phase 3 workstream B).
     Check {
@@ -257,10 +258,14 @@ pub enum Command {
         #[arg(long, value_name = "HOST", default_value = "127.0.0.1")]
         host: String,
     },
-    /// Serve JSON-RPC over stdio for agent harnesses (OpenCode, Claude Code,
-    /// Codex, Hermes, Pi Agent, ...).
+    /// Founder Playbook & Content Psychology Engine: score, optimize, and generate prompt contracts.
+    Playbook {
+        #[command(subcommand)]
+        kind: PlaybookKind,
+    },
+    /// JSON-RPC 2.0 interface over stdin/stdout for desktop UI integration.
     ///
-    /// Long-running bridge: reads one JSON-RPC request per stdin line, streams
+    /// Long-running process: reads JSON-RPC requests from stdin and writes, streams
     /// responses (progress/result/error) to stdout. stdout is reserved for
     /// responses — it never emits the JSON envelope.
     Rpc,
@@ -387,6 +392,40 @@ pub enum KanbanKind {
     },
 }
 
+#[derive(Debug, Subcommand, Clone)]
+pub enum PlaybookKind {
+    /// Score content against the 17 Founder Playbook behavioral frameworks.
+    Score {
+        /// The video title to audit.
+        #[arg(long, value_name = "TITLE", required = true)]
+        title: String,
+        /// Optional video description.
+        #[arg(long, value_name = "DESC")]
+        description: Option<String>,
+        /// Optional spoken hook (first 3-5 seconds).
+        #[arg(long, value_name = "HOOK")]
+        hook: Option<String>,
+    },
+    /// Generate a production contract prompt for a ticket.
+    Contract {
+        /// Target channel (BOOKVERSE or TECHVERSE).
+        #[arg(long, value_name = "CHANNEL", required = true)]
+        channel: String,
+        /// Video topic.
+        #[arg(long, value_name = "TOPIC", required = true)]
+        topic: String,
+        /// Primary search keyword.
+        #[arg(long, value_name = "KEYWORD", required = true)]
+        keyword: String,
+        /// Approved title (<50 chars, 0 colons).
+        #[arg(long, value_name = "TITLE", required = true)]
+        title: String,
+        /// Strategic framework applied.
+        #[arg(long, value_name = "FRAMEWORK", required = true)]
+        framework: String,
+    },
+}
+
 #[derive(Debug, Subcommand)]
 pub enum CheckKind {
     /// Check stored videos for privacy/deletion via videos.list (needs
@@ -462,30 +501,6 @@ pub enum FilmotKind {
         #[arg(long, value_name = "ID", required = true)]
         video_id: String,
     },
-}
-
-#[derive(Debug, Subcommand)]
-pub enum ThumbnailKind {
-    /// Render a 1280x720 thumbnail PNG via headless Chromium.
-    Render {
-        /// Stored video id to render (title, channel, duration, category).
-        #[arg(long, value_name = "ID")]
-        video_id: Option<String>,
-        /// Draft title to render (no stored video needed).
-        #[arg(long, value_name = "TITLE")]
-        draft_title: Option<String>,
-        /// Template name (default: "default").
-        #[arg(long, value_name = "NAME", default_value = "default")]
-        template: String,
-        /// Output PNG path (default: <cwd>/<video_id>.png).
-        #[arg(long, value_name = "PATH")]
-        out: Option<PathBuf>,
-        /// Keep the temporary assets dir (debug only; PRD §5.7 cleanup).
-        #[arg(long, action = ArgAction::SetTrue)]
-        keep_assets: bool,
-    },
-    /// List the available template names.
-    ListTemplates,
 }
 
 #[derive(Debug, Subcommand)]
@@ -675,10 +690,6 @@ impl Cli {
             Command::Reindex => "reindex",
             Command::Backup { .. } => "backup",
             Command::Quota => "quota",
-            Command::Thumbnail { kind } => match kind {
-                ThumbnailKind::Render { .. } => "thumbnail render",
-                ThumbnailKind::ListTemplates => "thumbnail list-templates",
-            },
             Command::Check { kind } => match kind {
                 CheckKind::Availability { .. } => "check availability",
             },
@@ -709,6 +720,10 @@ impl Cli {
                 KanbanKind::Show { .. } => "kanban show",
                 KanbanKind::Delete { .. } => "kanban delete",
                 KanbanKind::Prompt { .. } => "kanban prompt",
+            },
+            Command::Playbook { kind } => match kind {
+                PlaybookKind::Score { .. } => "playbook score",
+                PlaybookKind::Contract { .. } => "playbook contract",
             },
             Command::Serve { .. } => "serve",
             Command::Rpc => "rpc",

@@ -262,7 +262,8 @@ mod tests {
             let mut saved = Vec::new();
             for (k, v) in kvs {
                 saved.push((k.to_string(), std::env::var(k).ok()));
-                std::env::set_var(k, v);
+                // SAFETY: test-only environment variable isolation.
+                unsafe { std::env::set_var(k, v); }
             }
             EnvGuard(saved)
         }
@@ -271,9 +272,12 @@ mod tests {
     impl Drop for EnvGuard {
         fn drop(&mut self) {
             for (k, prev) in &self.0 {
-                match prev {
-                    Some(v) => std::env::set_var(k, v),
-                    None => std::env::remove_var(k),
+                // SAFETY: test-only environment variable isolation.
+                unsafe {
+                    match prev {
+                        Some(v) => std::env::set_var(k, v),
+                        None => std::env::remove_var(k),
+                    }
                 }
             }
         }

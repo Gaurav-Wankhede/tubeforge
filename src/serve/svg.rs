@@ -229,7 +229,7 @@ pub fn layers_diagram() -> String {
     let chips: [(&str, &str); 5] = [
         ("CLI --json", "exit codes 0–5"),
         ("export", "CSV / ZIP"),
-        ("thumbnail render", "chromiumoxide · Tailwind v4"),
+        ("playbook", "Founder Playbook Engine"),
         ("rpc", "stdio JSON-RPC"),
         ("serve", "dashboard · SSE · CSRF"),
     ];

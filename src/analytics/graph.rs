@@ -125,9 +125,14 @@ pub async fn sync_overlap_edges(db: &Db, videos: &[VideoRow]) -> Result<usize, T
             } else {
                 inter as f64 / union as f64
             };
-            fresh.push((channels[i].clone(), channels[j].clone(), weight));
+            if weight >= 0.08 {
+                fresh.push((channels[i].clone(), channels[j].clone(), weight));
+            }
         }
     }
+
+    fresh.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    fresh.truncate(1000);
 
     db.delete_overlap_edges().await?;
     let mut written = 0;

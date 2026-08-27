@@ -5,6 +5,7 @@
 //! 500/429/timeout, ETag caching for RSS, `search.list` NEVER used.
 
 pub mod api;
+pub mod innertube;
 pub mod oembed;
 pub mod quota;
 pub mod rss;

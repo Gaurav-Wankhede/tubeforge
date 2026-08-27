@@ -134,57 +134,47 @@ impl YtdlpClient {
         let tmp = tempfile::tempdir().map_err(|e| storage_err("YTD LP_TMP", e))?;
         let stem = tmp.path().join("sub");
 
-        // Manual first (better quality), auto as fallback. yt-dlp writes
-        // `<stem>.<lang>.<fmt>` on success — check both manual + auto and
-        // any-language variants of each.
-        for (kind, flag) in [
-            (TranscriptKind::Manual, "--write-subs"),
-            (TranscriptKind::Auto, "--write-auto-sub"),
-        ] {
-            let base = self.common_args(&[
-                "--skip-download",
-                "--no-playlist",
-                flag,
-                "--sub-langs",
-                &format!("{lang}.*"),
-                "--sub-format",
-                "vtt",
-                "-o",
-                &stem.to_string_lossy(),
-                &format!("https://www.youtube.com/watch?v={video_id}"),
-            ]);
-            let cmd = Command::new(&self.binary)
-                .args(&base)
-                .stdout(Stdio::null())
-                .stderr(Stdio::piped())
-                .output();
+        let base = self.common_args(&[
+            "--skip-download",
+            "--no-playlist",
+            "--write-subs",
+            "--write-auto-sub",
+            "--sub-langs",
+            &format!("{lang}.*"),
+            "--sub-format",
+            "vtt",
+            "-o",
+            &stem.to_string_lossy(),
+            &format!("https://www.youtube.com/watch?v={video_id}"),
+        ]);
+        let cmd = Command::new(&self.binary)
+            .args(&base)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output();
 
-            let output = match tokio::time::timeout(self.timeout, cmd).await {
-                Ok(o) => o,
-                Err(_) => {
-                    return Err(storage_err(
-                        "YTD LP_TIMEOUT",
-                        format!("yt-dlp timed out after {}s", self.timeout.as_secs()),
-                    ))
-                }
-            };
+        let output = match tokio::time::timeout(self.timeout, cmd).await {
+            Ok(o) => o,
+            Err(_) => {
+                return Err(storage_err(
+                    "YTD LP_TIMEOUT",
+                    format!("yt-dlp timed out after {}s", self.timeout.as_secs()),
+                ))
+            }
+        };
 
-            let output = output.map_err(|e| TubeforgeError::Fetch {
-                src: Source::Ytdlp,
-                url: video_id.to_string(),
-                inner: format!("spawn {flag}: {e}"),
-            })?;
+        let output = output.map_err(|e| TubeforgeError::Fetch {
+            src: Source::Ytdlp,
+            url: video_id.to_string(),
+            inner: format!("spawn transcript: {e}"),
+        })?;
 
-            if output.status.success() {
-                if let Some(text) = read_subtitle(&tmp, &stem).await? {
-                    return Ok((text, kind));
-                }
-                // Success but no caption file written (e.g. "There are no
-                // subtitles for the requested languages") → try the next kind.
-            } else {
-                continue;
+        if output.status.success() {
+            if let Some(text) = read_subtitle(&tmp, &stem).await? {
+                return Ok((text, TranscriptKind::Auto));
             }
         }
+
         Err(TubeforgeError::Fetch {
             src: Source::Ytdlp,
             url: video_id.to_string(),
@@ -286,7 +276,6 @@ impl YtdlpClient {
             &extractor_args,
             &format!("https://www.youtube.com/watch?v={video_id}"),
         ]);
-        eprintln!("[ytdlp-debug] comments args: {base:?}");
         let output = Command::new(&self.binary)
             .args(&base)
             .stdout(Stdio::piped())
@@ -377,7 +366,6 @@ impl YtdlpClient {
         let base = self.common_args(&[
             "--dump-json",
             "--skip-download",
-            "--no-playlist",
             "--no-warnings",
             "--extractor-args",
             "youtube:player_client=android",

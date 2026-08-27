@@ -17,8 +17,6 @@ pub struct Config {
     pub log_level: String,
     pub youtube_api_key: Option<String>,
     pub quota_warn_at: u64,
-    /// Pinned Chromium install dir for the thumbnail renderer (Phase 3).
-    pub chromium_dir: PathBuf,
     /// yt-dlp binary path (Phase 6/6.5 transcript extraction). Default
     /// `yt-dlp` (on PATH); `TUBEFORGE_YTDLP_PATH` overrides.
     pub ytdlp_path: PathBuf,
@@ -58,7 +56,6 @@ impl Config {
             log_level: "info".to_string(),
             youtube_api_key: None,
             quota_warn_at: 90,
-            chromium_dir: data_dir.join("chromium"),
             ytdlp_path: PathBuf::from("yt-dlp"),
             ytdlp_enabled: false,
             ytdlp_client: None,
@@ -93,18 +90,6 @@ pub fn load(
     } else {
         // Default: <data>/backups (LLD §11).
         cfg.backup_dir = cfg.data_dir.join("backups");
-    }
-
-    // Default: <data>/chromium; follows the effective data dir when the env
-    // override is absent (Phase 3 thumbnail renderer).
-    if let Ok(v) = std::env::var("TUBEFORGE_CHROMIUM_DIR") {
-        if !v.trim().is_empty() {
-            cfg.chromium_dir = expand_tilde(&v);
-        } else {
-            cfg.chromium_dir = cfg.data_dir.join("chromium");
-        }
-    } else {
-        cfg.chromium_dir = cfg.data_dir.join("chromium");
     }
 
     if let Ok(v) = std::env::var("TUBEFORGE_BACKUP_KEEP") {

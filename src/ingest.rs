@@ -8,8 +8,11 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use futures::StreamExt;
+use tokio::sync::Semaphore;
 
 use crate::config::Config;
 use crate::error::TubeforgeError;
@@ -279,16 +282,36 @@ async fn run_channel_batch(
     let mut videos: Vec<VideoRow> = Vec::new();
     let mut logs: Vec<LogRow> = Vec::new();
 
-    // 1. Fetch all (network first; single-connection constraint is irrelevant
-    //    here — no DB writes during fetch).
+    // 1. Fetch all concurrently with bounded concurrency (16 workers).
+    let mut existing_map: HashMap<String, Option<ChannelRow>> = HashMap::new();
     for t in targets {
         let existing = db.get_channel(&t.channel_id).await?;
+        existing_map.insert(t.channel_id.clone(), existing);
+    }
+
+    let sem = Arc::new(Semaphore::new(16));
+    let mut fetch_tasks = futures::stream::FuturesUnordered::new();
+
+    for t in targets {
+        let sem = sem.clone();
+        let cid = t.channel_id.clone();
+        let handle = t.handle.clone();
+        let existing = existing_map.get(&t.channel_id).cloned().flatten();
         let etag = existing.as_ref().and_then(|c| c.etag.clone());
-        match rss::fetch_feed(clients, &t.channel_id, etag.as_deref()).await {
+
+        fetch_tasks.push(async move {
+            let _permit = sem.acquire().await.ok();
+            let res = rss::fetch_feed(clients, &cid, etag.as_deref()).await;
+            (cid, handle, existing, res)
+        });
+    }
+
+    while let Some((cid, handle, existing, res)) = fetch_tasks.next().await {
+        match res {
             Ok(FeedResult::NotModified) => {
                 summary.channels_skipped += 1;
                 logs.push((
-                    format!("channel {}", t.channel_id),
+                    format!("channel {}", cid),
                     "skipped".to_string(),
                     Some("304 not modified".to_string()),
                 ));
@@ -298,15 +321,14 @@ async fn run_channel_batch(
                     .channel_title
                     .clone()
                     .or_else(|| existing.as_ref().map(|c| c.title.clone()))
-                    .unwrap_or_else(|| t.channel_id.clone())
+                    .unwrap_or_else(|| cid.clone())
                     .trim()
                     .to_string();
-                let handle = t
-                    .handle
+                let handle = handle
                     .clone()
                     .or_else(|| existing.as_ref().and_then(|c| c.handle.clone()));
                 let chan = ChannelRow {
-                    channel_id: t.channel_id.clone(),
+                    channel_id: cid.clone(),
                     handle,
                     title,
                     description: existing.as_ref().and_then(|c| c.description.clone()),
@@ -328,8 +350,6 @@ async fn run_channel_batch(
                             channels.push(chan);
                         } else {
                             summary.channels_skipped += 1;
-                            // ETag-only change: persist it (keeps future
-                            // refreshes 304-efficient) but not content.
                             if ex.etag != chan.etag {
                                 channels.push(chan);
                             }
@@ -337,18 +357,18 @@ async fn run_channel_batch(
                     }
                 }
                 logs.push((
-                    format!("channel {}", t.channel_id),
+                    format!("channel {}", cid),
                     "ok".to_string(),
                     Some(format!("feed fetched ({} entries)", feed.entries.len())),
                 ));
                 for v in feed.entries {
-                    videos.push(video_from_rss(&v, &t.channel_id, &now));
+                    videos.push(video_from_rss(&v, &cid, &now));
                 }
             }
             Err(e) => {
                 summary.channels_failed += 1;
                 logs.push((
-                    format!("channel {}", t.channel_id),
+                    format!("channel {}", cid),
                     "failed".to_string(),
                     Some(e.to_string()),
                 ));

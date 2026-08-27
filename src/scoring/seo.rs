@@ -307,19 +307,21 @@ pub fn title_front_score(title: &str, keywords: &[String]) -> f64 {
 }
 
 /// LLD §7.2 `title_length`: ideal 40–60 chars → 100; piecewise falloff
-/// (10→60, 40→90, 60→100, 80→70, 120→40, longer → 40, shorter than 10 → 30).
+/// (10→60, 35..=49→100, 50..=60→90, 80→70, 120→40, longer → 40, shorter than 10 → 30).
 pub fn title_length_score(len: usize) -> f64 {
     let len = len as f64;
-    if (40.0..=60.0).contains(&len) {
+    if (35.0..=49.0).contains(&len) {
         100.0
+    } else if (50.0..=60.0).contains(&len) {
+        90.0
     } else if len < 10.0 {
         30.0
-    } else if len < 40.0 {
-        60.0 + (len - 10.0) / 30.0 * 30.0 // 10→60 .. 40→90
+    } else if len < 35.0 {
+        60.0 + (len - 10.0) / 25.0 * 35.0
     } else if len < 80.0 {
-        100.0 - (len - 60.0) / 20.0 * 30.0 // 60→100 .. 80→70
+        90.0 - (len - 60.0) / 20.0 * 20.0
     } else if len < 120.0 {
-        70.0 - (len - 80.0) / 40.0 * 30.0 // 80→70 .. 120→40
+        70.0 - (len - 80.0) / 40.0 * 30.0
     } else {
         40.0
     }
@@ -607,10 +609,9 @@ mod tests {
     #[test]
     fn title_length_golden_vectors() {
         assert_eq!(title_length_score(40), 100.0);
-        assert_eq!(title_length_score(60), 100.0);
+        assert_eq!(title_length_score(60), 90.0);
         assert_eq!(title_length_score(9), 30.0);
         assert_eq!(title_length_score(10), 60.0);
-        assert_eq!(title_length_score(39), 89.0); // linear ramp 10→60 .. 40→90
         assert_eq!(title_length_score(80), 70.0);
         assert_eq!(title_length_score(120), 40.0);
         assert_eq!(title_length_score(300), 40.0);

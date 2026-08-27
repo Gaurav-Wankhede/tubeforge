@@ -54,7 +54,8 @@ pub fn recommendations(
     if tl < 100.0 {
         out.push(Recommendation {
             component: "title_length",
-            message: "Aim for a 40-60 character title (currently scored low on length)".to_string(),
+            message: "Aim for a 35-49 character title strictly under 50 characters (mobile-safe CTR sweet spot)"
+                .to_string(),
             current: tl,
         });
     }

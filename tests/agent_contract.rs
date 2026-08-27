@@ -236,14 +236,23 @@ fn agent_contract_check_availability_no_key() {
 }
 
 #[test]
-fn agent_contract_thumbnail_list_templates() {
+fn agent_contract_playbook_score() {
     let ctx = Ctx::new();
     let envs = ctx.envs();
     let env_refs: Vec<(&str, &str)> = envs.iter().map(|(k, v)| (*k, v.as_str())).collect();
     run_ok(&["init"], &env_refs);
-    let data = run_ok(&["thumbnail", "list-templates"], &env_refs);
-    let templates = data["templates"].as_array().expect("templates array");
-    assert!(!templates.is_empty());
+    let data = run_ok(
+        &[
+            "playbook",
+            "score",
+            "--title",
+            "Why Your Brain Lies to You (Fast Thinking)",
+        ],
+        &env_refs,
+    );
+    assert!(data.get("value_equation_score").is_some());
+    assert!(data.get("success_score").is_some());
+    assert!(data.get("influence_score").is_some());
 }
 
 /// Agent-harness bridge: spawn `tubeforge rpc`, speak line-delimited JSON-RPC
