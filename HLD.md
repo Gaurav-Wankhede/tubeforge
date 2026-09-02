@@ -49,9 +49,10 @@ All heavy lifting that must be *correct* (BM25 ranking, vector similarity, graph
                         │  • Channel RSS feeds     │  zero quota
                         │  • oEmbed endpoint       │  zero quota
                         │  • Data API v3 (opt-in)  │  user's free key, 10k units/day
-                        │  • yt-dlp (opt-in local) │  transcripts/comments/research
-                        └───────────┬──────────────┘
-                                    │ HTTPS (reqwest, tokio) / yt-dlp subprocess
+                         │  • yt-dlp (opt-in local) │  transcripts/comments/research
+                         │  • vectron-whisper     │  local Whisper GGML (shared with Vectron)
+                         └───────────┬──────────────┘
+                                     │ HTTPS (reqwest, tokio) / yt-dlp subprocess / whisper-rs (local, shared with Vectron)
 ┌───────────────────────────────────▼──────────────────────────────────┐
 │                     USER MACHINE (macOS arm64)                        │
 │                                                                       │
@@ -99,6 +100,7 @@ All heavy lifting that must be *correct* (BM25 ranking, vector similarity, graph
 | Fetch | `api` | YouTube Data API v3 client — `videos.list` batched ≤50 IDs/call, 1 unit/call; rich metadata; never `search.list` |
 | Fetch | `quota` | Per-endpoint budget accounting, persisted usage, dashboard output |
 | Fetch | `ytdlp` | Transcript (auto/manual captions, WebVTT→text), comments, heatmap/live stats, SERP research via yt-dlp subprocess (opt-in) |
+| Fetch | `whisper` | Local Whisper ASR fallback (`vectron-whisper` crate — `whisper-rs` GGML, `symphonia`→`rubato` 16kHz mono, `normalize()`+WER, shared model cache `<data>/models/whisper/` with Vectron) — `transcript get --engine whisper|auto` when captions missing; `transcripts.source="whisper_local"` |
 | Ingest | `ingest` | URL/ID extraction, @handle → channel_id resolution, dedupe, transactional upsert, ingest log, backup guard |
 | Storage | `db` | `tfdb` repository layer (22 schemas, CRUD) — the only module touching the engine |
 | Storage | `search` | TubeForge-owned BM25 index (`src/search`) over titles/descriptions/tags; atomic `index.json` snapshot; rebuildable (`reindex`) |
@@ -177,6 +179,7 @@ tubeforge serve --port 8080
 | oEmbed | Always | 0 | title, author, thumbnail only | Baseline for single videos |
 | YouTube Data API v3 | Only with user's key in `.env` | 10,000 units/day; `videos.list` = 1 unit/call (≤50 IDs) | tags, category, duration, full stats | Rich metadata, batched + cached |
 | yt-dlp | Opt-in, local | 0 | transcripts (auto/manual subs), comments, heatmap/live stats, SERP research | Content layer; subprocess |
+| vectron-whisper (Whisper GGML) | Opt-in, local | 0 | private offline transcripts (16kHz mono, `normalize()`+WER), fallback when captions disabled | Offline ASR; shared model cache with Vectron |
 | Filmot | Opt-in (`TUBEFORGE_FILMOT_KEY`) | 0 | raw JSON passthrough (recovery only) | No DB writes |
 | Scraping | **Never** | — | — | Explicitly forbidden (ToS) |
 

@@ -270,7 +270,7 @@ fn local_name(name: &[u8]) -> &[u8] {
 }
 
 /// Read a single attribute value by exact key name (entities unescaped).
-fn attr(e: &BytesStart, key: &[u8]) -> Option<String> {
+fn attr(e: &BytesStart<'_>, key: &[u8]) -> Option<String> {
     e.attributes()
         .with_checks(false)
         .flatten()

@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-09-02
+
+### Added & Fixed
+
+- **Apollo GraphQL & Vectron Strict Rust Standard**:
+  - Enforced strict `[lints.rust]` and `[lints.clippy]` in `Cargo.toml` (`unsafe_code = "deny"`, `dead_code = "deny"`, `unused_imports = "deny"`).
+  - Eliminated 100% of inline `#[allow(...)]` attributes across the entire codebase.
+  - Eliminated all `unsafe` blocks in `src/commands/greedy.rs`, `src/scoring/weights.rs`, and tests.
+- **Durable `tfdb` Storage & WAL Synchronization**:
+  - Fixed `Engine::reload()` stale WAL file descriptor re-opening after truncation.
+  - Added atomic `Db::checkpoint()` flushes and dynamic `Value::as_i64` / `Value::as_f64` type coercions.
+  - Fixed `Db::count` table name parsing when SQL `FROM` clause is omitted.
+- **Live Keyless Ingestion & Modern YouTube InnerTube Engine**:
+  - Switched `fetch_video_meta` to direct `v1/player` InnerTube protocol (`clientName: "WEB"`).
+  - Added modern `find_like_accessibility_text` extracting exact likes from segmented button view models.
+  - Added `parse_subscriber_text` extracting live channel subscriber counts from channel HTML headers.
+- **Analytics & Mathematical EDA Precision**:
+  - Fixed `seo_min` score zero-clamp bug (`seo_min.min(0.0)`) in channel scorecard reports.
+  - Added zero-safe mathematical calculations for Expected Watch Time $\mathbb{E}[T]$, Engagement Density $E_{\text{norm}}$, and Outlier Multiplier $R = \frac{V}{\text{Median}(V)}$.
+- **Personal Studio & Svelte 5 Dashboard**:
+  - Synchronized real-time YouTube metrics, high-resolution thumbnails, and engagement graphs across all 15 videos.
+
 ## [0.2.2] - 2026-08-27
 
 ### Fixed & Optimized

@@ -50,6 +50,12 @@ pub fn all() -> Vec<TableSchema> {
             .float("recording_lng")
             .json("topic_categories")
             .text("privacy_status"),
+        TableSchema::new("user_channels", "channel_id")
+            .text("custom_name")
+            .int("is_primary")
+            .text("notes")
+            .text("created_at")
+            .text("updated_at"),
         TableSchema::new("competitors", "channel_id")
             .text("label")
             .text("added_at"),
@@ -256,12 +262,13 @@ mod tests {
             "competitors",
             "ingest_log",
             "kanban_tickets",
+            "user_channels",
         ] {
             assert!(
                 names.iter().any(|n| n == required),
                 "missing table {required}"
             );
         }
-        assert_eq!(schemas.len(), 26);
+        assert_eq!(schemas.len(), 27);
     }
 }

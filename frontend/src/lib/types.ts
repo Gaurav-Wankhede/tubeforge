@@ -74,12 +74,18 @@ export interface ScoreBreakdown {
 export interface ScoreRow {
   video_id: string
   title: string
+  channel_id?: string
   channel_name: string
   overall_score: number
   freshness_score: number
   authority_score: number
   published_at: string
   views: number
+  like_count?: number
+  comment_count?: number
+  duration_sec?: number
+  thumb_url?: string
+  outlier_multiplier?: number
 }
 
 export interface IdeaRationale {
@@ -522,3 +528,43 @@ export interface TagGapWithAuthority {
   opportunity_score: number
   tag_authority: number | null
 }
+
+// ---- Kanban types (Phase 7 Production Board) ----
+
+export interface KanbanTicket {
+  ticket_id: string
+  title: string
+  channel: string
+  status: 'todo' | 'inprogress' | 'done' | 'published'
+  topic: string | null
+  framework: string | null
+  optimal_duration_sec: number | null
+  target_keyword: string | null
+  youtube_url: string | null
+  video_id: string | null
+  research_ref: string | null
+  notes: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface KanbanSummary {
+  total: number
+  todo: number
+  inprogress: number
+  done: number
+  published: number
+}
+
+export interface KanbanListResponse {
+  summary: KanbanSummary
+  tickets: KanbanTicket[]
+}
+
+export interface KanbanPromptResponse {
+  ticket_id: string
+  title: string
+  channel: string
+  prompt: string
+}
+

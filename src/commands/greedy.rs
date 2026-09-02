@@ -345,9 +345,10 @@ pub async fn run_stop(cfg: &Config) -> Result<Value, TubeforgeError> {
 
     #[cfg(unix)]
     {
-        unsafe {
-            libc::kill(pid as i32, libc::SIGTERM);
-        }
+        let _ = tokio::process::Command::new("kill")
+            .arg(pid.to_string())
+            .status()
+            .await;
         // Wait briefly for the process to exit.
         for _ in 0..50 {
             if !is_alive(pid) {
@@ -368,7 +369,11 @@ pub async fn run_stop(cfg: &Config) -> Result<Value, TubeforgeError> {
 fn is_alive(pid: u32) -> bool {
     #[cfg(unix)]
     {
-        unsafe { libc::kill(pid as i32, 0) == 0 }
+        std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
     }
     #[cfg(not(unix))]
     {

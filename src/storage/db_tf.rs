@@ -87,6 +87,21 @@ pub struct VideoRow {
     pub privacy_status: Option<String>,
 }
 
+/// Selective patch envelope for idempotent, coalesced video updates.
+#[derive(Debug, Clone, Default)]
+pub struct VideoPatch {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub duration_sec: Option<i64>,
+    pub view_count: Option<i64>,
+    pub like_count: Option<i64>,
+    pub comment_count: Option<i64>,
+    pub published_at: Option<String>,
+    pub tags: Option<Vec<String>>,
+    pub thumb_url: Option<String>,
+    pub updated_at: String,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ScoreRow {
     pub video_id: String,
@@ -219,6 +234,16 @@ pub struct KeywordResearchRow {
     pub actively_published: bool,
     pub suggested_tags: String,
     pub related_keywords: String,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct UserChannelRow {
+    pub channel_id: String,
+    pub custom_name: Option<String>,
+    pub is_primary: bool,
+    pub notes: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 /// A raw row of the `kg_entities` table (used by the KG builder/loader).
@@ -740,6 +765,12 @@ impl Db {
         Ok(())
     }
 
+    /// Checkpoint the in-memory database to disk and truncate WAL.
+    pub async fn checkpoint(&self) -> Result<u64, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        eng.checkpoint()
+    }
+
     pub async fn meta_get(&self, key: &str) -> Result<Option<String>, TubeforgeError> {
         let mut eng = self.engine.lock().unwrap();
         eng.reload()?;
@@ -1180,7 +1211,6 @@ impl Db {
             .unwrap_or_default())
     }
 
-    #[allow(clippy::type_complexity)]
     pub async fn channel_snapshots(
         &self,
         channel_id: &str,
@@ -1841,7 +1871,6 @@ impl Db {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub async fn upsert_keyword_research(
         &self,
         keyword: &str,
@@ -1980,6 +2009,188 @@ impl Db {
         Ok(())
     }
 
+    /// Update full video metadata: title, description, duration, stats, tags, published_at, thumb_url.
+    pub async fn update_video_full_metadata(
+        &self,
+        video_id: &str,
+        title: Option<&str>,
+        description: Option<&str>,
+        duration_seconds: Option<i64>,
+        view_count: Option<i64>,
+        like_count: Option<i64>,
+        comment_count: Option<i64>,
+        published_at: Option<&str>,
+        tags: Option<&str>,
+        thumb_url: Option<&str>,
+        updated_at: &str,
+    ) -> Result<(), TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        let Some(mut row) = eng.get("videos", video_id)? else {
+            return Ok(());
+        };
+        if let Some(t) = title {
+            if !t.is_empty() {
+                row.insert("title".to_string(), v_text(t));
+            }
+        }
+        if let Some(d) = description {
+            if !d.is_empty() {
+                row.insert("description".to_string(), v_text(d));
+            }
+        }
+        if let Some(dur) = duration_seconds {
+            if dur > 0 {
+                row.insert("duration_sec".to_string(), Value::Int(dur));
+            }
+        }
+        if view_count.is_some() {
+            row.insert("view_count".to_string(), v_int(view_count));
+        }
+        if like_count.is_some() {
+            row.insert("like_count".to_string(), v_int(like_count));
+        }
+        if comment_count.is_some() {
+            row.insert("comment_count".to_string(), v_int(comment_count));
+        }
+        if let Some(pub_at) = published_at {
+            if !pub_at.is_empty() {
+                row.insert("published_at".to_string(), v_text(pub_at));
+            }
+        }
+        if let Some(tg) = tags {
+            if !tg.is_empty() && tg != "[]" {
+                row.insert("tags".to_string(), v_text(tg));
+            }
+        }
+        if let Some(th) = thumb_url {
+            if !th.is_empty() {
+                row.insert("thumb_url".to_string(), v_text(th));
+            }
+        } else if !row.contains_key("thumb_url") {
+            row.insert("thumb_url".to_string(), v_text(&format!("https://i.ytimg.com/vi/{}/hqdefault.jpg", video_id)));
+        }
+        row.insert("updated_at".to_string(), v_text(updated_at));
+        let mut tx = eng.begin();
+        tx.put("videos", row)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Idempotent & coalescing selective patch for a video row.
+    /// Only touches columns that have actually changed from live YouTube data.
+    /// Skips database transaction entirely if all incoming values match existing state (0 disk writes).
+    pub async fn patch_video_coalesced(
+        &self,
+        video_id: &str,
+        patch: &VideoPatch,
+    ) -> Result<bool, TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        let Some(existing) = eng.get("videos", video_id)? else {
+            return Err(TubeforgeError::Storage {
+                code: "NOT_FOUND".to_string(),
+                message: format!("Video {video_id} not found in database"),
+            });
+        };
+
+        let mut changed = false;
+        let mut row = existing.clone();
+
+        // 1. Check & patch view_count
+        if let Some(new_views) = patch.view_count {
+            let cur_views = existing.get("view_count").and_then(|v| v.as_i64());
+            if cur_views != Some(new_views) {
+                row.insert("view_count".to_string(), Value::Int(new_views));
+                changed = true;
+            }
+        }
+
+        // 2. Check & patch like_count
+        if let Some(new_likes) = patch.like_count {
+            let cur_likes = existing.get("like_count").and_then(|v| v.as_i64());
+            if cur_likes != Some(new_likes) {
+                row.insert("like_count".to_string(), Value::Int(new_likes));
+                changed = true;
+            }
+        }
+
+        // 3. Check & patch comment_count
+        if let Some(new_comments) = patch.comment_count {
+            let cur_comments = existing.get("comment_count").and_then(|v| v.as_i64());
+            if cur_comments != Some(new_comments) {
+                row.insert("comment_count".to_string(), Value::Int(new_comments));
+                changed = true;
+            }
+        }
+
+        // 4. Check & patch duration_sec
+        if let Some(new_dur) = patch.duration_sec {
+            let cur_dur = existing.get("duration_sec").and_then(|v| v.as_i64());
+            if cur_dur != Some(new_dur) && new_dur > 0 {
+                row.insert("duration_sec".to_string(), Value::Int(new_dur));
+                changed = true;
+            }
+        }
+
+        // 5. Check & patch thumb_url
+        if let Some(ref new_thumb) = patch.thumb_url {
+            let cur_thumb = existing.get("thumb_url").and_then(|v| v.as_text());
+            if cur_thumb != Some(new_thumb.as_str()) && !new_thumb.is_empty() {
+                row.insert("thumb_url".to_string(), v_text(new_thumb));
+                changed = true;
+            }
+        }
+
+        // 6. Check & patch title
+        if let Some(ref new_title) = patch.title {
+            let cur_title = existing.get("title").and_then(|v| v.as_text());
+            if cur_title != Some(new_title.as_str()) && !new_title.is_empty() {
+                row.insert("title".to_string(), v_text(new_title));
+                changed = true;
+            }
+        }
+
+        // 7. Check & patch description
+        if let Some(ref new_desc) = patch.description {
+            let cur_desc = existing.get("description").and_then(|v| v.as_text());
+            if cur_desc != Some(new_desc.as_str()) && !new_desc.is_empty() {
+                row.insert("description".to_string(), v_text(new_desc));
+                changed = true;
+            }
+        }
+
+        // 8. Check & patch tags (coalesce/merge new tags without wiping existing)
+        if let Some(ref new_tags) = patch.tags {
+            let cur_tags_str = existing.get("tags").and_then(|v| v.as_text()).unwrap_or("[]");
+            let mut cur_tags_set: std::collections::HashSet<String> = serde_json::from_str(cur_tags_str).unwrap_or_default();
+            let mut tags_modified = false;
+            for t in new_tags {
+                let clean = t.trim().to_string();
+                if !clean.is_empty() && cur_tags_set.insert(clean) {
+                    tags_modified = true;
+                }
+            }
+            if tags_modified {
+                let mut merged_vec: Vec<String> = cur_tags_set.into_iter().collect();
+                merged_vec.sort();
+                if let Ok(json_str) = serde_json::to_string(&merged_vec) {
+                    row.insert("tags".to_string(), v_text(&json_str));
+                    changed = true;
+                }
+            }
+        }
+
+        // 9. If nothing changed, coalesce and return false immediately (0 disk writes!)
+        if !changed {
+            return Ok(false);
+        }
+
+        row.insert("updated_at".to_string(), v_text(&patch.updated_at));
+        let mut tx = eng.begin();
+        tx.put("videos", row)?;
+        tx.commit()?;
+        Ok(true)
+    }
+
     /// Refresh a channel's subscriber count and stamp `updated_at`.
     pub async fn update_channel_subscribers(
         &self,
@@ -2014,6 +2225,98 @@ impl Db {
         row.insert("updated_at".to_string(), v_text(updated_at));
         let mut tx = eng.begin();
         tx.put("videos", row)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Put or upsert a channel row into `channels`.
+    pub async fn put_channel(&self, c: &ChannelRow) -> Result<(), TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        let mut tx = eng.begin();
+        tx.put("channels", channel_to_row(c))?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Put or upsert a video row into `videos`.
+    pub async fn put_video(&self, v: &VideoRow) -> Result<(), TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        let mut tx = eng.begin();
+        tx.put("videos", video_to_row(v))?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Retrieve all user-registered channels from the `user_channels` table.
+    pub async fn all_user_channels(&self) -> Result<Vec<UserChannelRow>, TubeforgeError> {
+        let eng = self.engine.lock().unwrap();
+        let rows = eng.all("user_channels").unwrap_or_default();
+        let mut out = Vec::new();
+        for r in rows {
+            let channel_id = r.get("channel_id").and_then(|v| v.as_text()).unwrap_or_default().to_string();
+            let custom_name = r.get("custom_name").and_then(|v| v.as_text()).map(|s| s.to_string());
+            let is_primary = r.get("is_primary").and_then(|v| v.as_i64()).unwrap_or(0) != 0;
+            let notes = r.get("notes").and_then(|v| v.as_text()).map(|s| s.to_string());
+            let created_at = r.get("created_at").and_then(|v| v.as_text()).unwrap_or_default().to_string();
+            let updated_at = r.get("updated_at").and_then(|v| v.as_text()).unwrap_or_default().to_string();
+            out.push(UserChannelRow {
+                channel_id,
+                custom_name,
+                is_primary,
+                notes,
+                created_at,
+                updated_at,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Get a specific user channel by ID from `user_channels`.
+    pub async fn get_user_channel(&self, channel_id: &str) -> Result<Option<UserChannelRow>, TubeforgeError> {
+        let eng = self.engine.lock().unwrap();
+        let Some(r) = eng.get("user_channels", channel_id)? else {
+            return Ok(None);
+        };
+        let custom_name = r.get("custom_name").and_then(|v| v.as_text()).map(|s| s.to_string());
+        let is_primary = r.get("is_primary").and_then(|v| v.as_i64()).unwrap_or(0) != 0;
+        let notes = r.get("notes").and_then(|v| v.as_text()).map(|s| s.to_string());
+        let created_at = r.get("created_at").and_then(|v| v.as_text()).unwrap_or_default().to_string();
+        let updated_at = r.get("updated_at").and_then(|v| v.as_text()).unwrap_or_default().to_string();
+        Ok(Some(UserChannelRow {
+            channel_id: channel_id.to_string(),
+            custom_name,
+            is_primary,
+            notes,
+            created_at,
+            updated_at,
+        }))
+    }
+
+    /// Insert or update a user channel in `user_channels`.
+    pub async fn put_user_channel(&self, row: UserChannelRow) -> Result<(), TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        let mut map = std::collections::BTreeMap::new();
+        map.insert("channel_id".to_string(), v_text(&row.channel_id));
+        if let Some(cn) = &row.custom_name {
+            map.insert("custom_name".to_string(), v_text(cn));
+        }
+        map.insert("is_primary".to_string(), Value::Int(if row.is_primary { 1 } else { 0 }));
+        if let Some(n) = &row.notes {
+            map.insert("notes".to_string(), v_text(n));
+        }
+        map.insert("created_at".to_string(), v_text(&row.created_at));
+        map.insert("updated_at".to_string(), v_text(&row.updated_at));
+        let mut tx = eng.begin();
+        tx.put("user_channels", map)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Remove a user channel from `user_channels`.
+    pub async fn delete_user_channel(&self, channel_id: &str) -> Result<(), TubeforgeError> {
+        let mut eng = self.engine.lock().unwrap();
+        let mut tx = eng.begin();
+        tx.delete("user_channels", channel_id)?;
         tx.commit()?;
         Ok(())
     }
@@ -2108,7 +2411,6 @@ impl Db {
         Ok(ids)
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub async fn persist_kg_entity(
         &self,
         entity_id: &str,
@@ -2879,19 +3181,30 @@ impl Batch<'_> {
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-/// Extract the table name from a legacy `SELECT count(*) FROM <table>` string.
+/// Extract the table name from a legacy `SELECT count(*) FROM <table>` string or plain table name.
 fn extract_from_table(sql: &str) -> Option<String> {
-    let lower = sql.to_ascii_lowercase();
-    let idx = lower.find("from")?;
-    let rest = lower[idx + 4..].trim_start();
-    let word: String = rest
-        .chars()
-        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
-        .collect();
-    if word.is_empty() {
-        None
+    let lower = sql.trim().to_ascii_lowercase();
+    if let Some(idx) = lower.find("from") {
+        let rest = lower[idx + 4..].trim_start();
+        let word: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        if word.is_empty() {
+            None
+        } else {
+            Some(word)
+        }
     } else {
-        Some(word)
+        let word: String = lower
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        if word.is_empty() {
+            None
+        } else {
+            Some(word)
+        }
     }
 }
 
@@ -2959,14 +3272,18 @@ pub async fn persist_serp_db(
     let mut vt_rows: Vec<Row> = Vec::new();
 
     for r in results {
-        if !r.channel_id.is_empty() && eng.get("channels", &r.channel_id)?.is_none() {
-            let mut row = Row::new();
-            row.insert("channel_id".to_string(), v_text(&r.channel_id));
-            row.insert("title".to_string(), v_text(&r.channel));
-            row.insert("source".to_string(), v_text("yt-dlp"));
-            row.insert("fetched_at".to_string(), v_text(&now));
-            row.insert("updated_at".to_string(), v_text(&now));
-            channel_rows.push(row);
+        if !r.channel_id.is_empty() {
+            let mut chan_row = eng.get("channels", &r.channel_id)?.unwrap_or_default();
+            chan_row.insert("channel_id".to_string(), v_text(&r.channel_id));
+            if !r.channel.is_empty() {
+                chan_row.insert("title".to_string(), v_text(&r.channel));
+            }
+            chan_row.insert("source".to_string(), v_text("yt-dlp"));
+            if !chan_row.contains_key("fetched_at") {
+                chan_row.insert("fetched_at".to_string(), v_text(&now));
+            }
+            chan_row.insert("updated_at".to_string(), v_text(&now));
+            channel_rows.push(chan_row);
         }
 
         let tags_json = serde_json::to_string(&r.tags).unwrap_or_else(|_| "[]".to_string());
@@ -2997,17 +3314,45 @@ pub async fn persist_serp_db(
             }
             None => tags_json.clone(),
         };
-        let mut row = Row::new();
+
+        let mut row = existing.unwrap_or_default();
         row.insert("video_id".to_string(), v_text(&r.video_id));
-        row.insert("channel_id".to_string(), v_opt_text(channel_param));
-        row.insert("title".to_string(), v_text(&r.title));
+        if let Some(cp) = channel_param {
+            row.insert("channel_id".to_string(), v_text(cp));
+        }
+        if !r.title.is_empty() {
+            row.insert("title".to_string(), v_text(&r.title));
+        }
         row.insert("tags".to_string(), v_json(&tags));
-        row.insert("published_at".to_string(), v_text(&published));
-        row.insert("view_count".to_string(), v_int(r.view_count));
-        row.insert("like_count".to_string(), v_int(r.like_count));
-        row.insert("comment_count".to_string(), v_int(r.comment_count));
+        if !row.contains_key("published_at") || row.get("published_at").and_then(|v| v.as_text()).map(|s| s.is_empty()).unwrap_or(true) {
+            row.insert("published_at".to_string(), v_text(&published));
+        }
+        if let Some(vc) = r.view_count {
+            row.insert("view_count".to_string(), Value::Int(vc));
+        }
+        if let Some(lc) = r.like_count {
+            row.insert("like_count".to_string(), Value::Int(lc));
+        }
+        if let Some(cc) = r.comment_count {
+            row.insert("comment_count".to_string(), Value::Int(cc));
+        }
+        if let Some(dur) = r.duration_sec {
+            row.insert("duration_sec".to_string(), Value::Int(dur));
+        }
+        if let Some(ref thumb) = r.thumb_url {
+            row.insert("thumb_url".to_string(), v_text(thumb));
+        } else if !row.contains_key("thumb_url") {
+            row.insert("thumb_url".to_string(), v_text(&format!("https://i.ytimg.com/vi/{}/hqdefault.jpg", r.video_id)));
+        }
+        if let Some(ref desc) = r.description {
+            if !desc.is_empty() {
+                row.insert("description".to_string(), v_text(desc));
+            }
+        }
         row.insert("source".to_string(), v_text("yt-dlp"));
-        row.insert("fetched_at".to_string(), v_text(&now));
+        if !row.contains_key("fetched_at") {
+            row.insert("fetched_at".to_string(), v_text(&now));
+        }
         row.insert("updated_at".to_string(), v_text(&now));
         video_rows.push(row);
 

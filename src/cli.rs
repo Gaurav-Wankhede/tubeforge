@@ -246,12 +246,12 @@ pub enum Command {
         #[command(subcommand)]
         kind: KanbanKind,
     },
-    /// Serve the local HTMX dashboard (PRD §5.4 deferred item).
+    /// Serve the unified creator cockpit (PRD §5.4).
     ///
-    /// Long-running server: binds loopback only, never emits the JSON
-    /// envelope (stdout stays empty; the listening line goes to stderr).
+    /// Long-running server: binds loopback only, hosts the Svelte 5 frontend SPA,
+    /// REST API, and WebSocket JSON-RPC on port 17487 (or --port override).
     Serve {
-        /// Listen port (default 8080; TUBEFORGE_SERVE_PORT overrides).
+        /// Listen port (default 17487; TUBEFORGE_SERVE_PORT overrides).
         #[arg(long, value_name = "PORT")]
         port: Option<u16>,
         /// Bind host — loopback only (127.0.0.1, localhost or ::1).

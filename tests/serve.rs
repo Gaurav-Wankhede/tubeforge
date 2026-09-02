@@ -157,6 +157,7 @@ async fn spawn_server() -> (String, u16, Db) {
         data_dir: spa_dir.path().to_path_buf(),
         own_channel: None,
         kg: Arc::new(std::sync::Mutex::new(None)),
+        sync_status: Arc::new(std::sync::Mutex::new(Default::default())),
     };
     let (router, serve_state) = serve::app(state);
     tokio::spawn(async move {

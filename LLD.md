@@ -42,7 +42,8 @@ tubeforge/
 │   │   ├── oembed.rs           # single-video metadata
 │   │   ├── api.rs              # YouTube Data API v3 client (videos.list batching)
 │   │   ├── quota.rs            # per-endpoint budget ledger (persisted in meta table)
-│   │   └── ytdlp.rs            # transcripts (auto/manual subs→WebVTT→text), comments, heatmap, SERP research (opt-in)
+│   │   ├── ytdlp.rs            # transcripts (auto/manual subs→WebVTT→text), comments, heatmap, SERP research (opt-in)
+│   │   └── whisper.rs          # local Whisper ASR fallback (vectron-whisper crate, whisper-rs GGML, symphonia→rubato 16kHz mono, shared model cache with Vectron)
 │   ├── ingest.rs               # resolution, ID extraction, dedupe, upsert orchestration
 │   ├── categories.rs           # YouTube category map (32 ids → names)
 │   ├── tfdb/                   # from-scratch storage engine (pure Rust)
@@ -140,6 +141,9 @@ videos            (video_id PK, channel_id, title, description, tags JSON[], cat
                    recording_date, recording_location_name, recording_lat, recording_lng,
                    topic_categories JSON[], thumb_url, embedding BLOB [unused — lexical only],
                    source rss|oembed|api, privacy_status, fetched_at, updated_at)
+// Interconnect: transcripts.source = "whisper_local" when TubeForge falls back to vectron-whisper;
+// same crate (../vectron/crates/vectron-whisper, whisper-rs GGML, 16kHz mono, normalize+WER)
+// is used by Vectron VEC-008 (voice/0N.wav vs SCRIPT.md) — one model cache <data>/models/whisper/
 competitors       (channel_id PK, label, added_at)
 keywords          (keyword PK, niche, created_at)
 keyword_rankings  (keyword\x1fchecked_at PK, video_id, position [NULL = not found], topics JSON)
@@ -218,7 +222,7 @@ meta              (key PK, value)  -- schema_version, quota_*, last_backup_at, l
 | `forecast` | Growth forecast from `channel_snapshots` (weighted OLS + recency half-life) | `--horizon`, `--channels`, `--json` |
 | `suggest <topic>` | Next-video recommendations (forecast-ranked, excludes covered topics, view-prediction tier + "why") | `--json` |
 | `tags backfill\|analyze` | Backfill tag entities; analyze tag coverage/gaps | `--json` |
-| `transcript get\|list\|clear` | yt-dlp caption extraction (auto/manual subs → WebVTT→text) → `transcripts` table | `--json` |
+| `transcript get\|list\|clear` | yt-dlp caption extraction (auto/manual subs → WebVTT→text) → `transcripts` table; `--engine auto|ytdlp|whisper` — `whisper` via shared `vectron-whisper` Rust crate (whisper-rs GGML, local GGML fallback when captions disabled), `source="whisper_local"` | `--engine`, `--model`, `--lang`, `--json` |
 | `metadata` | Video heatmap / live stats via yt-dlp | `--json` |
 | `comments get\|list\|clear` | yt-dlp comment extraction (opt-in) → `comments` table | `--json` |
 | `gaps [--channel]` / `gaps outliers` | Content/tag gap analysis (incl. graph gaps when KG built) | `--channel`, `--markdown`, `--json` |

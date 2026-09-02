@@ -80,22 +80,29 @@ pub enum RelationType {
     Contains,
 }
 
+impl std::str::FromStr for RelationType {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "tags" => Ok(RelationType::Tags),
+            "created_by" => Ok(RelationType::CreatedBy),
+            "about_topic" => Ok(RelationType::AboutTopic),
+            "competes_in" => Ok(RelationType::CompetesIn),
+            "dominates" => Ok(RelationType::Dominates),
+            "related_to" => Ok(RelationType::RelatedTo),
+            "similar_to" => Ok(RelationType::SimilarTo),
+            "mentioned_in" => Ok(RelationType::MentionedIn),
+            "contains" => Ok(RelationType::Contains),
+            _ => Err(()),
+        }
+    }
+}
+
 impl RelationType {
     /// Parse a relation_type from its string form.
-    #[allow(clippy::should_implement_trait)]
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "tags" => Some(RelationType::Tags),
-            "created_by" => Some(RelationType::CreatedBy),
-            "about_topic" => Some(RelationType::AboutTopic),
-            "competes_in" => Some(RelationType::CompetesIn),
-            "dominates" => Some(RelationType::Dominates),
-            "related_to" => Some(RelationType::RelatedTo),
-            "similar_to" => Some(RelationType::SimilarTo),
-            "mentioned_in" => Some(RelationType::MentionedIn),
-            "contains" => Some(RelationType::Contains),
-            _ => None,
-        }
+    pub fn parse_type(s: &str) -> Option<Self> {
+        <Self as std::str::FromStr>::from_str(s).ok()
     }
 }
 
@@ -646,7 +653,7 @@ mod tests {
             rel in arbitrary_relation_type(),
         ) {
             let s = rel.to_string();
-            let parsed = RelationType::from_str(&s).unwrap();
+            let parsed = RelationType::parse_type(&s).unwrap();
             prop_assert_eq!(rel, parsed);
         }
 

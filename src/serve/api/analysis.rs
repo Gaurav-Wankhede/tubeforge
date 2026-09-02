@@ -18,7 +18,6 @@ use std::collections::HashMap;
 
 use super::AppState;
 use crate::fetch::FetchClients;
-use crate::storage::db::Db;
 
 /// Build the analysis router (mounted by `api_routes` under `/api/analysis`).
 pub fn analysis_routes() -> Router {
@@ -48,10 +47,21 @@ async fn topic_api(
     }
     let serp: u64 = params.get("serp").and_then(|v| v.parse().ok()).unwrap_or(6);
 
-    let ytdlp = st.ytdlp.as_ref().ok_or_else(|| {
+    let ytdlp_fallback = crate::fetch::ytdlp::YtdlpClient::new(
+        if std::path::Path::new("/opt/homebrew/bin/yt-dlp").exists() {
+            std::path::PathBuf::from("/opt/homebrew/bin/yt-dlp")
+        } else {
+            std::path::PathBuf::from("yt-dlp")
+        },
+        true,
+        None,
+        None,
+    ).ok();
+
+    let ytdlp = st.ytdlp.as_ref().or(ytdlp_fallback.as_ref()).ok_or_else(|| {
         (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({ "error": "yt-dlp disabled — set TUBEFORGE_YTDLP_ENABLED=true" })),
+            Json(json!({ "error": "yt-dlp not available on system" })),
         )
     })?;
     let clients = FetchClients::new().map_err(api_err)?;
@@ -66,55 +76,30 @@ async fn topic_api(
         .map_err(api_err)?;
 
     // Persist (feeds future analysis) — non-fatal. Clone into locals first so
-    // `research` is not borrowed across the awaits (the handler future must
-    // remain `Send` for axum — `&[SerpResult]` borrowed from a local is not).
+    // Persist real-time SERP search results & video views immediately to SQLite
     let serp_rows = research.serp.clone();
-    let snapshot = (
-        research.keyword.clone(),
-        research.volume_label.clone(),
-        research.serp_total,
-        research.serp_mean_views,
-        research.ranking_channels,
-        research.competition_score,
-        research.opportunity_score,
-        research.actively_published,
-        serde_json::to_string(&research.suggested_tags).unwrap_or_else(|_| "[]".to_string()),
-        serde_json::to_string(&research.related_keywords).unwrap_or_else(|_| "[]".to_string()),
-    );
-    let db_path = st.db.path.clone();
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build();
-        let Ok(rt) = rt else { return };
-        rt.block_on(async move {
-            match Db::open(&db_path).await {
-                Ok(db) => {
-                    if let Err(e) = crate::storage::db::persist_serp_db(&db, &serp_rows).await {
-                        tracing::warn!(err = %e, "analysis: persist serp failed");
-                    }
-                    if let Err(e) = crate::analytics::tags::analyze_competitors(&db).await {
-                        tracing::warn!(err = %e, "analysis: analyze competitors failed");
-                    }
-                }
-                Err(e) => tracing::warn!(err = %e, "analysis: open db failed"),
-            }
-        });
-    });
+    if let Err(e) = crate::storage::db_tf::persist_serp_db(&st.db, &serp_rows).await {
+        tracing::warn!(err = %e, "analysis: persist serp failed");
+    }
+    if let Err(e) = crate::analytics::tags::analyze_competitors(&st.db).await {
+        tracing::warn!(err = %e, "analysis: analyze competitors failed");
+    }
+    let suggested_tags_str = serde_json::to_string(&research.suggested_tags).unwrap_or_else(|_| "[]".to_string());
+    let related_keywords_str = serde_json::to_string(&research.related_keywords).unwrap_or_else(|_| "[]".to_string());
     let _ = st
         .db
         .upsert_keyword_research(
-            &snapshot.0,
+            &research.keyword,
             &crate::util::now_rfc3339(),
-            &snapshot.1,
-            snapshot.2 as i64,
-            snapshot.3,
-            snapshot.4 as i64,
-            snapshot.5,
-            snapshot.6,
-            snapshot.7,
-            &snapshot.8,
-            &snapshot.9,
+            &research.volume_label,
+            research.serp_total as i64,
+            research.serp_mean_views,
+            research.ranking_channels as i64,
+            research.competition_score,
+            research.opportunity_score,
+            research.actively_published,
+            &suggested_tags_str,
+            &related_keywords_str,
         )
         .await;
 
@@ -191,8 +176,12 @@ async fn topic_api(
         "ranking_chart": ranking_chart,
         "packaging": {
             "title": draft.title,
+            "title_variations": draft.title_variations,
+            "mobile_preview_45": draft.mobile_preview_45,
             "description": draft.description,
             "tags": draft.tags,
+            "has_colon": draft.title.contains(':'),
+            "char_count": draft.title.chars().count(),
         },
         "suggested_tags": research.suggested_tags,
         "related_keywords": research.related_keywords,

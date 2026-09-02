@@ -186,8 +186,14 @@ pub async fn scorecard(db: &Db, only: &[String]) -> Result<Value, TubeforgeError
             seo_scores.iter().sum::<f64>() / seo_scores.len() as f64
         };
         let seo_median = median(&mut seo_scores.clone());
-        let seo_min = seo_scores.iter().copied().fold(f64::INFINITY, f64::min);
-        let seo_max = seo_scores.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let (seo_min, seo_max) = if seo_scores.is_empty() {
+            (0.0, 0.0)
+        } else {
+            (
+                seo_scores.iter().copied().fold(f64::INFINITY, f64::min),
+                seo_scores.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+            )
+        };
 
         rows.push(json!({
             "channel_id": c.channel_id,
@@ -206,8 +212,8 @@ pub async fn scorecard(db: &Db, only: &[String]) -> Result<Value, TubeforgeError
             "seo": {
                 "avg": round2(seo_avg),
                 "median": round2(seo_median),
-                "min": round2(seo_min.min(0.0)),
-                "max": round2(seo_max.max(0.0)),
+                "min": round2(seo_min),
+                "max": round2(seo_max),
                 "scored": seo_scores.len(),
             },
         }));
@@ -347,6 +353,45 @@ pub async fn health(db: &Db, stale_days: u32) -> Result<Value, TubeforgeError> {
         engagement.iter().sum::<f64>() / engagement.len() as f64
     };
 
+    // ——— 5-Pillar Wiring ———
+    // Pillar 1: Trust Score (cold-start)
+    let all_channels = db.all_channels().await?;
+    let all_videos = db.all_videos().await?;
+    // Own channel heuristic: TUBEFORGE_OWN_CHANNEL or first channel
+    let own_id = std::env::var("TUBEFORGE_OWN_CHANNEL").ok()
+        .and_then(|id| all_channels.iter().find(|c| c.channel_id == id).map(|c| c.channel_id.clone()))
+        .or_else(|| all_channels.first().map(|c| c.channel_id.clone()));
+    let trust = if let Some(oid) = &own_id {
+        let own_ch = all_channels.iter().find(|c| &c.channel_id == oid);
+        let own_vids: Vec<VideoRow> = all_videos.iter().filter(|v| v.channel_id.as_deref() == Some(oid.as_str())).cloned().collect();
+        let t = crate::analytics::trust::compute(own_ch, &own_vids);
+        json!({ "channel_id": oid, "total": t.total, "metadata": t.metadata, "volume": t.volume, "category_focus": t.category_focus, "cadence": t.cadence, "tier1_ready": t.tier1_ready, "reasons": t.reasons })
+    } else {
+        json!({ "channel_id": null, "total": 0, "tier1_ready": false, "reasons": ["No channels ingested yet"] })
+    };
+    // Pillar 4: Session chains (pillar loops)
+    let tickets = db.list_kanban_tickets(None, None).await.unwrap_or_default();
+    let session_chains = crate::analytics::session::build_chains(&all_videos, &tickets);
+    let session_json: Vec<Value> = session_chains.iter().map(|c| json!({
+        "pillar_video_id": c.pillar_video_id, "pillar_title": c.pillar_title,
+        "pillar_duration_sec": c.pillar_duration_sec, "feeders": c.feeders,
+        "multiplier": c.multiplier, "verdict": c.verdict
+    })).collect();
+    // Pillar 5: Value monopoly (avg across own videos)
+    let monopoly_scores: Vec<f64> = if let Some(oid) = &own_id {
+        all_videos.iter().filter(|v| v.channel_id.as_deref() == Some(oid.as_str())).map(|v| {
+            let tags: Vec<String> = serde_json::from_str(&v.tags).unwrap_or_default();
+            crate::analytics::monopoly::score_video(v, &v.description, &tags).total
+        }).collect()
+    } else { Vec::new() };
+    let monopoly_avg = if monopoly_scores.is_empty() { 0.0 } else { monopoly_scores.iter().sum::<f64>() / monopoly_scores.len() as f64 };
+    // Chronological evolution (DecodingYT 3-phase law) — scoped to own channel when known
+    let chrono_vids = if let Some(oid) = &own_id {
+        let own: Vec<VideoRow> = all_videos.iter().filter(|v| v.channel_id.as_deref() == Some(oid.as_str())).cloned().collect();
+        if own.len() >= 6 { own } else { all_videos.clone() }
+    } else { all_videos.clone() };
+    let chronology = crate::analytics::chronology::decode(chrono_vids);
+
     Ok(json!({
         "counts": counts,
         "privacy": {
@@ -376,6 +421,15 @@ pub async fn health(db: &Db, stale_days: u32) -> Result<Value, TubeforgeError> {
                 "like_count": disabled_like,
                 "comment_count": disabled_comment,
             },
+        },
+        "trust": trust,
+        "session_chains": session_json,
+        "value_monopoly": { "avg": round2(monopoly_avg), "videos_scored": monopoly_scores.len() },
+        "chronology": {
+            "current_phase": chronology.current_phase,
+            "evolution": chronology.evolution,
+            "recommendation": chronology.recommendation,
+            "phases": chronology.phases
         },
     }))
 }

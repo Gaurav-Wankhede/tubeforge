@@ -1,7 +1,8 @@
 //! Packaging-psychology scoring (PRD v4.2 supporting layer).
 //!
 //! A quantified detector/scorer for the high-CTR title patterns used by the
-//! researched creators (Dan Martell, Alex Hormozi, Jeff Su, Liam Ottley):
+//! researched creators (Dan Martell, Alex Hormozi, Jeff Su, Liam Ottley,
+//! George Alexander @george.xander):
 //!
 //! 1. **Time-anchor** — "Give me 60 seconds…", "in 5 minutes".
 //! 2. **Precise non-round number + extreme outcome** — "The 7 Brutal Truths…",
@@ -11,6 +12,12 @@
 //!    "feels illegal", "the secret that…".
 //! 5. **How-to + identity/age constraint** — "How to write for beginners",
 //!    "for people over 40".
+//! 6. **How-opener / personal teacher** — "How I…", "How to survive…",
+//!    "Why posting…". George Xander `How` = teacher mode (32/75 titles).
+//! 7. **If-hypothetical / scenario** — "If I Started… I'd Do This",
+//!    "If your videos get <1000 views, do this". Conditional empathy.
+//! 8. **I-personal proof / build-log** — "I tried…", "I failed…",
+//!    "My 2nd Video Got 346k views". First-person parasocial proof.
 //!
 //! Design contract (PRD v4.2): SEO Strategy is the PRIMARY product; this
 //! psychology score is a **supporting** signal that boosts CTR/ranking
@@ -20,7 +27,8 @@
 
 use serde::{Deserialize, Serialize};
 
-/// The seven researched-creator title formulas (including Loewenstein information gap & threat prevention).
+/// The ten researched-creator title formulas (including George Xander's
+/// How/If/I personal-emotional triad + Loewenstein gap & threat prevention).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TitleFormula {
@@ -31,10 +39,13 @@ pub enum TitleFormula {
     HowToIdentity,
     LoewensteinGap,
     ThreatPrevention,
+    HowOpener,
+    IfHypothetical,
+    PersonalProof,
 }
 
 impl TitleFormula {
-    pub const ALL: [TitleFormula; 7] = [
+    pub const ALL: [TitleFormula; 10] = [
         TitleFormula::TimeAnchor,
         TitleFormula::PreciseNumber,
         TitleFormula::IncomeClaim,
@@ -42,6 +53,9 @@ impl TitleFormula {
         TitleFormula::HowToIdentity,
         TitleFormula::LoewensteinGap,
         TitleFormula::ThreatPrevention,
+        TitleFormula::HowOpener,
+        TitleFormula::IfHypothetical,
+        TitleFormula::PersonalProof,
     ];
 
     pub fn label(self) -> &'static str {
@@ -55,6 +69,9 @@ impl TitleFormula {
                 "Loewenstein information gap / definite referring expression"
             }
             TitleFormula::ThreatPrevention => "Loss aversion / high-stakes threat prevention",
+            TitleFormula::HowOpener => "How-opener / personal teacher (George Xander)",
+            TitleFormula::IfHypothetical => "If-hypothetical / conditional scenario",
+            TitleFormula::PersonalProof => "I/My personal proof / build-log",
         }
     }
 }
@@ -146,11 +163,17 @@ const IDENTITY_WORDS: [&str; 8] = [
 fn evidence(f: TitleFormula, lower: &str, original: &str) -> Option<String> {
     let frag = match f {
         TitleFormula::TimeAnchor => {
-            const WORDS: [&str; 10] = [
-                "second", "seconds", "minute", "minutes", "hour", "hours", "in 60", "in 30",
-                "in 10", "fast",
+            const WORDS: [&str; 16] = [
+                "second", "seconds", "minute", "minutes", "hour", "hours", "day", "days",
+                "week", "weeks", "month", "months", "year", "years", "in 60", "in 30",
             ];
-            first_match(lower, &WORDS)
+            // Also match "in 10", "fast" via fallback
+            if let Some(m) = first_match(lower, &WORDS) {
+                Some(m)
+            } else {
+                const EXTRA: [&str; 2] = ["in 10", "fast"];
+                first_match(lower, &EXTRA)
+            }
         }
         TitleFormula::PreciseNumber => precise_number(lower),
         TitleFormula::IncomeClaim => {
@@ -229,6 +252,60 @@ fn evidence(f: TitleFormula, lower: &str, original: &str) -> Option<String> {
             ];
             first_match(lower, &WORDS)
         }
+        TitleFormula::HowOpener => {
+            // George Xander "How" = teacher mode. Any title starting with
+            // "how " or "why " as a personal hook (broader than HowToIdentity
+            // which requires "how to"/"how i"). Covers:
+            // "How The YouTube Algorithm ACTUALLY Works",
+            // "How to survive being a small channel", "Why posting on YouTube…"
+            let trimmed = lower.trim_start();
+            if trimmed.starts_with("how ") || trimmed.starts_with("why ") {
+                Some("how-opener")
+            } else {
+                None
+            }
+        }
+        TitleFormula::IfHypothetical => {
+            // Conditional scenario: "If I Started…", "If your videos…",
+            // "If you struggle…". Defined by leading "if " clause.
+            let trimmed = lower.trim_start();
+            if trimmed.starts_with("if ") {
+                // Require a personal pronoun or scenario marker after "if"
+                const MARKERS: [&str; 6] = ["if i ", "if you", "if your", "if we ", "if it ", "if my "];
+                if MARKERS.iter().any(|m| lower.contains(m)) {
+                    Some("if-hypothetical")
+                } else {
+                    // Still count a bare leading "if " as hypothetical
+                    Some("if-hypothetical")
+                }
+            } else {
+                None
+            }
+        }
+        TitleFormula::PersonalProof => {
+            // First-person build-log proof: "I tried…", "I failed…", "I got…",
+            // "My 2nd Video…", "How I…". Requires I/My at a salient position.
+            let trimmed = lower.trim_start();
+            const I_MARKERS: [&str; 10] = [
+                "i tried",
+                "i failed",
+                "i built",
+                "i got",
+                "i made",
+                "i used",
+                "i went",
+                "i challenge",
+                "how i ",
+                "my ",
+            ];
+            if I_MARKERS.iter().any(|m| lower.contains(m)) {
+                Some("personal-proof")
+            } else if trimmed.starts_with("i ") || trimmed.starts_with("i'") {
+                Some("personal-proof")
+            } else {
+                None
+            }
+        }
     };
     frag.map(|m| matched_fragment(original, m))
 }
@@ -299,7 +376,8 @@ fn matched_fragment(_original: &str, matched: &str) -> String {
     matched.to_string()
 }
 
-/// Generate ranked high-CTR title variants for a topic (Martell/Hormozi/Loewenstein-style).
+/// Generate ranked high-CTR title variants for a topic (Martell/Hormozi/Loewenstein-style
+/// + George Xander How/If/I personal triad).
 /// `outcome` is an optional extreme-outcome phrase (e.g. "the brutal truth").
 pub fn variants(topic: &str, outcome: Option<&str>) -> Vec<String> {
     let t = topic.trim().trim_end_matches('.');
@@ -331,6 +409,14 @@ pub fn variants(topic: &str, outcome: Option<&str>) -> Vec<String> {
     v.push(format!(
         "Why 70% of {t} Server Crashes Happen at 3 AM — And How to Fix It"
     ));
+    // 7-9. George Xander How/If/I personal-emotional triad
+    v.push(format!("How I Mastered {t} (And How You Can Too)"));
+    v.push(format!("If I Started {t} From Scratch, I'd Do This"));
+    v.push(format!("I Tried {t} for 30 Days — This Is What Happened"));
+    // 10. How-opener teacher variant (broad How without "How to")
+    v.push(format!("How {t} Actually Works (And How to Beat It)"));
+    // 11. If-hypothetical pain variant
+    v.push(format!("If Your {t} Gets Less Than 1000 Views, Do This"));
     v
 }
 
@@ -418,6 +504,53 @@ mod tests {
         assert!(v.iter().any(|t| t.contains("Secret")));
         assert!(v.iter().any(|t| t.contains("Nobody Tells You")));
         assert!(v.iter().any(|t| t.contains("Beginners")));
+    }
+
+    #[test]
+    fn how_opener_detected() {
+        let s = score("How The YouTube Algorithm ACTUALLY Works (And How to Beat It)");
+        assert!(s.detected.contains(&TitleFormula::HowOpener));
+        let s2 = score("How to survive being a small YouTube channel (the TRUTH about growth)");
+        assert!(s2.detected.contains(&TitleFormula::HowOpener));
+        let s3 = score("Why posting on YouTube can change your life (even with no views!)");
+        assert!(s3.detected.contains(&TitleFormula::HowOpener));
+    }
+
+    #[test]
+    fn if_hypothetical_detected() {
+        let s = score("If I Started YouTube While Working Full-Time, I'd Do This");
+        assert!(s.detected.contains(&TitleFormula::IfHypothetical));
+        let s2 = score("If your videos get less than 1000 views, do this.");
+        assert!(s2.detected.contains(&TitleFormula::IfHypothetical));
+        let s3 = score("If you struggle with creating content, please watch this.");
+        assert!(s3.detected.contains(&TitleFormula::IfHypothetical));
+    }
+
+    #[test]
+    fn personal_proof_detected() {
+        let s = score("I tried YouTube for 365 days. This is what happened.");
+        assert!(s.detected.contains(&TitleFormula::PersonalProof));
+        let s2 = score("I failed at YouTube, until I understood this");
+        assert!(s2.detected.contains(&TitleFormula::PersonalProof));
+        let s3 = score("My 2nd Youtube Video Got 346k views. Here's How I Did It.");
+        assert!(s3.detected.contains(&TitleFormula::PersonalProof));
+        let s4 = score("How I Got 25,000 Subscribers in 10 Months");
+        assert!(s4.detected.contains(&TitleFormula::PersonalProof));
+    }
+
+    #[test]
+    fn george_xander_triad_scores_high() {
+        // George's top title combines I-proof + time-anchor
+        let s = score("I tried YouTube for 365 days. This is what happened.");
+        assert!(s.detected.contains(&TitleFormula::PersonalProof));
+        assert!(s.detected.contains(&TitleFormula::TimeAnchor));
+        assert!(s.total >= 40.0);
+        // How + If + I variants all generate
+        let v = variants("YouTube", None);
+        assert!(v.iter().any(|t| t.starts_with("How I Mastered")));
+        assert!(v.iter().any(|t| t.starts_with("If I Started")));
+        assert!(v.iter().any(|t| t.starts_with("I Tried")));
+        assert!(v.iter().any(|t| t.contains("Actually Works")));
     }
 
     proptest::proptest! {

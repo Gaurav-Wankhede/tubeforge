@@ -10,7 +10,7 @@ use crate::config::Config;
 use crate::error::TubeforgeError;
 
 /// `tubeforge serve --port <PORT>`: port resolution is flag > env
-/// (`TUBEFORGE_SERVE_PORT`) > 8080; the server itself lives in
+/// (`TUBEFORGE_SERVE_PORT`) > 17487; the server itself lives in
 /// `crate::serve`.
 pub async fn run(cfg: &Config, host: &str, port: Option<u16>) -> Result<(), TubeforgeError> {
     let port = match port {
@@ -19,7 +19,7 @@ pub async fn run(cfg: &Config, host: &str, port: Option<u16>) -> Result<(), Tube
             Ok(v) => v.parse().map_err(|_| {
                 TubeforgeError::Config(format!("TUBEFORGE_SERVE_PORT not a number: {v}"))
             })?,
-            Err(_) => 8080,
+            Err(_) => 17487,
         },
     };
     crate::serve::run(cfg, host, port).await

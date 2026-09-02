@@ -57,6 +57,9 @@ const SUGGESTED_TAG_MAX: usize = 20;
 pub struct SerpResult {
     pub video_id: String,
     pub title: String,
+    pub description: Option<String>,
+    pub duration_sec: Option<i64>,
+    pub thumb_url: Option<String>,
     pub channel: String,
     pub channel_id: String,
     pub view_count: Option<i64>,
@@ -156,6 +159,9 @@ pub async fn inspect(
         enriched.push(SerpResult {
             video_id: r.video_id,
             title: r.title,
+            description: r.description,
+            duration_sec: r.duration_sec,
+            thumb_url: r.thumbnail,
             channel: r.channel,
             channel_id: r.channel_id,
             view_count: r.view_count,
@@ -392,7 +398,6 @@ pub struct TrendSignal {
 /// This is the "top ranking channels & videos by searched text" pipeline:
 /// the search input drives the analysis, so trends emerge from what actually
 /// ranks NOW for the topic. No paid service, no LLM, no API key.
-#[allow(clippy::too_many_arguments)]
 pub async fn discover(
     db: &Db,
     bm25: Option<&Bm25>,
@@ -598,6 +603,9 @@ pub fn _serp_from_ytdlp(results: Vec<YtdlpSearchResult>) -> Vec<SerpResult> {
         .map(|r| SerpResult {
             video_id: r.video_id,
             title: r.title,
+            description: r.description,
+            duration_sec: r.duration_sec,
+            thumb_url: r.thumbnail,
             channel: r.channel,
             channel_id: r.channel_id,
             view_count: r.view_count,
@@ -659,6 +667,9 @@ mod tests {
         let mk = |tags: Vec<&str>| SerpResult {
             video_id: "x".into(),
             title: "t".into(),
+            description: Some("d".into()),
+            duration_sec: None,
+            thumb_url: None,
             channel: "c".into(),
             channel_id: "cid".into(),
             view_count: None,

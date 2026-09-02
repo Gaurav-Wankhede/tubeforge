@@ -1,11 +1,11 @@
 **Product Requirements Document (PRD)**
-**Project Name:** **TubeForge**
-**Version:** 4.0 (Phases 0–6 delivered; Phase 4 hardening ongoing; KG + content layer integrated)
-**Date:** August 14, 2026
-**Status:** Ready for Release (v0.1.0) — Hardening Phase
-**Intended License:** MIT or Apache-2.0 (all dependencies permissive: no BUSL, no copyleft)
+**Project Name** — **TubeForge**
+**Version** — 4.5 (Phases 0–6 delivered; Phase 7 Real-Time Creator Cockpit and Visual Growth Engine in progress)
+**Date** — September 2, 2026
+**Status** — Active Development — Dashboard Modernization Phase
+**Intended License** — MIT or Apache-2.0 (all dependencies permissive — no BUSL, no copyleft)
 
-> **v4.0 architecture update (Aug 14, 2026):** v3.x documented the **Turso/SQLite + tantivy + Axum + htmx** stack. Between v3.15 and v4.0 the codebase **replaced that entire stack** (see §16 — Changelog): storage moved to a **from-scratch embedded engine `tfdb`** (custom `.wal` + `.dat` format — *not* SQLite-compatible, no rusqlite escape hatch), BM25 is now **TubeForge's own from-scratch engine** (tantivy removed), the dashboard server is a **raw-Hyper web framework** (Axum removed) with **WebSocket JSON-RPC** and **SSE** replacing htmx polling, and a **content/`analyze` layer** (yt-dlp transcripts, growth forecasting, packaging psychology) landed. Every section below reflects the shipped code, not the v3 aspiration.
+> **v4.5 architecture update (Sep 2, 2026)** — Building upon the v4.0 native engine stack (`tfdb` WAL storage, from-scratch BM25, raw-Hyper, WebSocket JSON-RPC, SSE, Louvain Graph engine, and autonomous `greedy` daemon), Phase 7 introduces the **Unified Real-Time Creator Cockpit**. This upgrades TubeForge from fragmented analytical subpages into an integrated, evidence-grounded production workflow (Visual SERP Grid, Verifiable Evidence Ledger, In-Browser Kanban Board, Script Studio with Teleprompter, and Live 1280x720 Thumbnail Studio).
 
 ---
 
@@ -15,7 +15,8 @@
 **Data Sources (Flexible Free Policy)**
 - Primary (always available, zero quota): Official YouTube Channel RSS feeds + Official oEmbed endpoint.
 - Optional (rich metadata): Free YouTube Data API v3 — only when the user provides their own free API key in the `.env` file.
-- Secondary, opt-in: **yt-dlp** for transcripts (auto/manual captions), comments, video heatmap/live stats, and live SERP research (`TUBEFORGE_*`-gated) — local extraction, never page scraping.
+ - Secondary, opt-in: **yt-dlp** for transcripts (auto/manual captions), comments, video heatmap/live stats, and live SERP research (`TUBEFORGE_*`-gated) — local extraction, never page scraping.
+ - **Local Whisper ASR fallback (shared with Vectron):** offline `vectron-whisper` crate (`whisper-rs` GGML, `symphonia`→`rubato` 16kHz mono) via path dep `../vectron/crates/vectron-whisper`. When `yt-dlp` captions miss, `transcript get --engine whisper|auto` extracts bestaudio via `yt-dlp` then transcribes locally with shared model cache `<data>/models/whisper/` — zero API cost, private. See PRD §5.2 + Vectron `AUDIO_ARCHITECTURE.md §1b`.
 - **Filmot** (opt-in recovery, `TUBEFORGE_FILMOT_KEY`): raw JSON passthrough only, no DB writes.
 - No page scraping of watch pages or channels.
 - No paid services of any kind.
@@ -121,16 +122,17 @@ Enable creators to produce highly optimized Titles, Descriptions, Tags, and cont
 - Backup guard (`tfdb` snapshot + integrity re-open) runs before every batch ingest.
 - All data stored in the single embedded `tfdb` store and linked for analysis.
 
-#### 5.4 Dashboard (delivered, v4.0 re-architecture)
-- Dashboard **delivered** as `tubeforge serve [--port] [--host]`; served by a **raw-Hyper web framework** (no Axum/web framework dependency).
+#### 5.4 Dashboard (v4.5 Svelte 5 Architecture)
+- Dashboard **delivered** as `tubeforge serve [--port] [--host]`; served by a **raw-Hyper web framework** with static asset serving.
+- **Frontend Architecture**: **Svelte 5 (Runes `$state`, `$derived`, `$effect`) + Vite + Tailwind CSS v4**. Compiler-first architecture eliminating Virtual DOM overhead for surgical, high-throughput real-time DOM updates.
+- **Single-Binary Embedding**: Compiles to an ultralight bundle (~35–50 KB gzipped) embedded directly into the Rust binary, ensuring zero-dependency, local-first execution.
 - **Loopback-only** binding (127.0.0.1 default; `localhost`/`::1` allowed; any non-loopback `--host` → rejected, exit 2). Port precedence: flag > `TUBEFORGE_SERVE_PORT` > 8080. Single-user, no auth.
-- **WebSocket JSON-RPC** at `/ws`: `{id, method, params}` in; tagged `progress` / `result` / `error` / `notification` out. Methods include `dashboard.overview`, `ideas.analyze`, `keywords.*`, `scores.*`, `videos.*`, `scorecard.get`, `health.get`, `gaps.*`, `tags.*`, `analysis.*`, `alerts.*`, `audit.get`, `channels.snapshots`. Progress streams precede final `result`; error codes `-32700` (parse) / `-32603` (internal).
-- **SSE** at `/events`: streams `counts` events every 5s (only on change) with a 15s `: ping` heartbeat — replaces htmx polling. Client helper vendored at `static/sse.js`.
-- **HTTP API** under `/api/`: `healthz`, `health`, `counts`, `trends`, `alerts`, `scores`, `videos`, `ideas/analyze`, `keywords*`, `scorecard`, `audit`, `channels/{id}/snapshots`, `gaps*`, `transcripts`, `comments`, `tags*`, `analysis/*`. Server-rendered inline SVG charts (`src/serve/svg.rs`).
-- **Pages:** `/` dashboard home (health cards + SSE + SVG charts), `/scores` (component drilldown via expand), `/ideas`, `/keywords`, `/alerts`, `/scorecard`, `/health`, `/healthz` (plain "ok").
-- **CSRF policy:** POSTs guarded by Origin/Referer check — presented origin's host:port must match the bound address (mismatch → 403); absent headers allowed (curl/scripts/agents can't be browser-CSRF'd).
-- **Concurrency caveat (single-writer):** `serve` opens one shared Db and mutates only via CLI code paths; do NOT run `serve` concurrently with writing CLI commands (snapshot/WAL readers fine).
-- **`--json` note:** `serve` is the one command that does NOT emit the JSON envelope — it is long-running and stdout stays empty (listening line → stderr); agent_contract suite untouched.
+- **WebSocket JSON-RPC** at `/ws`: `{id, method, params}` in; tagged `progress` / `result` / `error` / `notification` out. Methods include `dashboard.overview`, `ideas.analyze`, `keywords.*`, `scores.*`, `videos.*`, `scorecard.get`, `health.get`, `gaps.*`, `tags.*`, `analysis.*`, `alerts.*`, `audit.get`, `channels.snapshots`, `kanban.*`. Progress streams precede final `result`.
+- **SSE** at `/events`: streams `counts` and real-time greedy daemon / ingestion events every 5s (only on change) with a 15s `: ping` heartbeat.
+- **HTTP API** under `/api/`: REST endpoints for health, counts, trends, scores, videos, kanban, gaps, tags, transcripts, and analysis.
+- **Creator Workflows**: Unified 5-stage Cockpit (Research ➔ Evidence Ledger ➔ Ideas ➔ Script Studio with 60fps Teleprompter ➔ Live Thumbnail Studio ➔ Kanban Board).
+- **CSRF policy**: POSTs guarded by Origin/Referer check — presented origin's host:port must match the bound address (mismatch → 403); absent headers allowed (curl/scripts/agents can't be browser-CSRF'd).
+- **Concurrency caveat (single-writer)**: `serve` opens one shared Db and mutates only via CLI code paths; do NOT run `serve` concurrently with writing CLI commands (snapshot/WAL readers fine).
 
 #### 5.5 Grow Audience
 - Next Ideas, Saved Ideas (draft/saved/discarded), Niches.
@@ -252,6 +254,15 @@ Done: performance smoke gate **PASSED on M4** (5k videos: ingest 20.2s + reindex
 **Phase 6 – Engine Independence + Web RPC — ✅ COMPLETE (Aug 14, 2026, after v3.15)**
 Removed external engine/index/web dependencies in favor of TubeForge-owned components: **`tfdb` storage engine** replaces Turso/SQLite (`80666fb`); **from-scratch BM25** replaces tantivy (`02ae3ae`); **raw-Hyper web framework** replaces Axum (`fee8e3d`); **SSE replaces htmx polling** (`489a289`); **WebSocket JSON-RPC** surface (`/ws`, ~21 methods) + content/`analyze` layer (`analyze`, `transcript`, `growth`/`forecast`, `suggest`, `tags`, `gaps`, `videos dedupe`, `metadata`, `comments`), packaging-psychology scoring, HNSW module (unwired), KG fully integrated (kg_entities/kg_relations/kg_communities, PageRank + Louvain, `graph_scores`). SCHEMA_VERSION = 9. Tests + clippy green.
 
+**Phase 7 – Unified Real-Time Creator Cockpit & Visual Growth Engine — 🚀 IN PROGRESS (Sep 2, 2026)**
+Refines the TubeForge dashboard from isolated subpages into an integrated, evidence-grounded production workspace:
+1. **Visual SERP Grid & Media Cards**: 16:9 thumbnail previews, channel badges, and visual outlier performance multipliers (e.g. `8.21x Breakout`).
+2. **Verifiable Evidence Ledger**: Direct citation cards linking 18 SEO + 7 GEO algorithmic scores to exact BM25 documents, competitor videos, and tag clusters.
+3. **Interactive Production Kanban Board**: Full in-browser drag-and-drop workflow tracking (`todo` ➔ `inprogress` ➔ `done` ➔ `published`) directly connected to 0:00–0:45 First-Screen retention prompt contracts.
+4. **Script Studio & Recording Teleprompter**: WPM-controlled script prompter with spacebar playback, cue markers, and timer HUD.
+5. **Live 1280x720 Thumbnail Preview Studio**: Real-time visual template editing for high-contrast, zero-face developer thumbnails.
+6. **Real-Time WebSocket & SSE Event Ticker**: Live streaming feed of autonomous topic hunting (`greedy daemon`), keyword rank position deltas, and database transactions.
+
 **Phase 4 (cont.) – Release**
 Performance, documentation, cross-platform testing (Linux, Windows), public open-source release of **TubeForge** (MIT/Apache-2.0).
 
@@ -296,7 +307,7 @@ Global flags: `--json`, `--verbose`, `--db-path`, `--config`.
 | `ideas` | Next ideas; `--limit`, `--niche`, `--status` |
 | `keywords` | `add`, `check`, `report`, `inspect`, `research`, `discover` |
 | `tags` | `backfill`, `analyze` |
-| `transcript` | `get`, `list`, `clear` (yt-dlp captions → `transcripts` table) |
+| `transcript` | `get`, `list`, `clear` (yt-dlp captions → `transcripts` table; `--engine auto|ytdlp|whisper` — `whisper` via shared `vectron-whisper` Rust crate, local GGML fallback when captions disabled) |
 | `metadata` | Video heatmap / live stats via yt-dlp |
 | `comments` | `get`, `list`, `clear` |
 | `gaps` | Content/tag gap analysis; `--channel`, `--markdown`; `outliers` |
@@ -332,7 +343,7 @@ One JSON-RPC protocol, two transports:
 
 Envelope in: `{"id", "method", "params"}`. Envelope out: tagged `progress {id, progress, message}` → `result {id, data}` | `error {id, error:{code, message}}` | `notification {event, data}`. Parse errors return `-32700`; unknown methods / internal errors return `-32603`. stdout on the stdio transport carries **only** responses (one JSON per line, flushed per message).
 
-Methods: `dashboard.overview`, `ideas.analyze`, `keywords.list`, `keywords.trending`, `scores.list`, `scores.detail`, `scores.backfill`, `videos.list`, `videos.detail`, `scorecard.get`, `health.get`, `gaps.get`, `tags.cloud`, `tags.gaps`, `analysis.overview`, `analysis.next-video`, `analysis.keywords`, `analysis.refresh`, `alerts.list`, `audit.get`, `channels.snapshots`.
+Methods: `dashboard.overview`, `ideas.analyze`, `keywords.list`, `keywords.trending`, `scores.list`, `scores.detail`, `scores.backfill`, `videos.list`, `videos.detail`, `scorecard.get`, `health.get`, `gaps.get`, `tags.cloud`, `tags.gaps`, `analysis.overview`, `analysis.next-video`, `analysis.keywords`, `analysis.refresh`, `alerts.list`, `audit.get`, `channels.snapshots`, `kanban.list`, `kanban.create`, `kanban.move`, `kanban.prompt`.
 
 ---
 
@@ -367,7 +378,7 @@ Architecture decision: **KG is an internal-only enhancement to existing APIs. NO
 
 **Project Name for Open-Sourcing:** **TubeForge**
 
-This is the complete Product Requirements Document (Version 4.0).
+This is the complete Product Requirements Document (Version 4.5).
 
 ---
 
@@ -385,16 +396,17 @@ This is the complete Product Requirements Document (Version 4.0).
 
 **v3.15 update (Aug 8, 2026):** Architecture decision — **Knowledge Graph is internal-only enhancement** (see `PRD-KNOWLEDGE-GRAPH.md` v3.0). **NO** separate `/api/kg/*` endpoints. KG signals returned as optional fields on existing endpoints (`graph_scores` on scores, `centrality` on scorecard, etc.). Lazy-loaded via `kg_builder::load_or_build()`. Graceful degradation when KG not built. Full detail in `FRONTEND-BACKEND-MAP.md` and `PRD-KNOWLEDGE-GRAPH.md`.
 
-**v4.0 update (Aug 14, 2026):** **Stack re-architecture** — removed external engine/index/web dependencies; all heavy lifting now TubeForge-owned:
-- **Storage:** Turso/SQLite → **`tfdb`** from-scratch engine (`.wal` + `.dat`; fsync-on-commit; atomic checkpoint). **No SQLite compatibility; no rusqlite escape hatch** (ADR-1). SCHEMA_VERSION = 9, 22 tables.
-- **BM25:** tantivy → **from-scratch engine** in `src/search` (`k1=1.2, b=0.75`, atomic `index.json` snapshot).
-- **Server:** Axum → **raw-Hyper** web framework; **WebSocket JSON-RPC** (`/ws`, §13); **SSE** (`/events`) replaces htmx polling; `static/sse.js`; HTTP API under `/api/`.
-- **Content layer:** `analyze`, `transcript`, `metadata`, `comments`, `gaps`, `forecast`, `suggest`, `tags`, `videos dedupe`; growth forecasting (OLS + recency half-life); packaging-psychology title formulas.
-- **Scoring:** 18 SEO components (10 structural + 5 vidIQ + 3 graph via `graph_scores`) + 7 GEO + packaging-psychology supporting layer.
-- **KG fully integrated** (PageRank + Louvain, `kg_*` tables, `graph_scores`).
-- **HNSW** vector module ships but is unwired (no embeddings; deferred).
-- **Docs synced:** HLD v1.3, LLD v1.6 reflect the new stack.
+**v4.0 update (Aug 14, 2026):** **Stack re-architecture** — removed external engine/index/web dependencies; all heavy lifting now TubeForge-owned (`tfdb` engine, from-scratch BM25, raw-Hyper, WebSocket JSON-RPC, SSE, content layer, KG integrated).
+
+**v4.5 update (Sep 2, 2026):** **Phase 7 — Unified Real-Time Creator Cockpit & Visual Growth Engine (IN PROGRESS)**:
+- Upgrades TubeForge dashboard to a continuous creator workflow.
+- Visual media cards with 16:9 thumbnail previews and outlier badges.
+- Verifiable Evidence Ledger linking algorithmic scores to source documents and videos.
+- In-browser interactive video production Kanban board with drag-and-drop lifecycle transitions and retention prompt contracts.
+- In-browser recording teleprompter with pace/cue HUD.
+- Live Chromium thumbnail preview canvas.
+- Real-time WebSocket event ticker for autonomous greedy daemon and SERP position deltas.
 
 ---
 
-*Companion documents: `HLD.md` (v1.3), `LLD.md` (v1.6), `PRD-KNOWLEDGE-GRAPH.md` (v3.0), `FRONTEND-BACKEND-MAP.md`.*
+*Companion documents: `ROADMAP.md` (v1.0), `HLD.md` (v1.3), `LLD.md` (v1.6), `PRD-KNOWLEDGE-GRAPH.md` (v3.0), `FRONTEND-BACKEND-MAP.md`.*

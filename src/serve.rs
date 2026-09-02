@@ -99,6 +99,33 @@ const SSE_TICK: Duration = Duration::from_secs(5);
 /// connection alive while the counts are quiet.
 const SSE_HEARTBEAT: Duration = Duration::from_secs(15);
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SyncStatus {
+    pub is_running: bool,
+    pub total: usize,
+    pub processed: usize,
+    pub tags_synced: usize,
+    pub current_title: String,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+    pub message: String,
+}
+
+impl Default for SyncStatus {
+    fn default() -> Self {
+        Self {
+            is_running: false,
+            total: 0,
+            processed: 0,
+            tags_synced: 0,
+            current_title: String::new(),
+            started_at: None,
+            finished_at: None,
+            message: "Idle".to_string(),
+        }
+    }
+}
+
 /// Shared server state: one Db connection (opened at startup) plus the
 /// actually-bound `host:port` used by the CSRF origin guard.
 #[derive(Clone)]
@@ -120,6 +147,8 @@ pub struct AppState {
     /// endpoint is hit, then `Some(kg)` for the lifetime of the server.
     /// Wrapped in Arc<Mutex<>> for safe shared access across handlers.
     pub kg: Arc<std::sync::Mutex<Option<crate::analytics::kg::KnowledgeGraph>>>,
+    /// Real-time live background sync progress status.
+    pub sync_status: Arc<std::sync::Mutex<SyncStatus>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -306,13 +335,28 @@ pub async fn run(cfg: &Config, host: &str, port: u16) -> Result<(), TubeforgeErr
          (do not run writing commands concurrently); Ctrl-C to stop"
     );
 
+    let ytdlp_enabled = cfg.ytdlp_enabled 
+        || std::path::Path::new("/opt/homebrew/bin/yt-dlp").exists() 
+        || std::path::Path::new("/usr/local/bin/yt-dlp").exists();
+
+    let ytdlp_path = if std::path::Path::new("/opt/homebrew/bin/yt-dlp").exists() && cfg.ytdlp_path == std::path::PathBuf::from("yt-dlp") {
+        std::path::PathBuf::from("/opt/homebrew/bin/yt-dlp")
+    } else {
+        cfg.ytdlp_path.clone()
+    };
+
     let ytdlp = YtdlpClient::new(
-        cfg.ytdlp_path.clone(),
-        cfg.ytdlp_enabled,
+        ytdlp_path,
+        ytdlp_enabled,
         cfg.ytdlp_client.clone(),
         cfg.ytdlp_js_runtime.clone(),
     )
     .ok();
+    let initial_sync_status = if let Ok(Some(saved)) = db.meta_get("sync_status").await {
+        serde_json::from_str::<SyncStatus>(&saved).unwrap_or_default()
+    } else {
+        SyncStatus::default()
+    };
     let state = AppState {
         db: Arc::new(db),
         bind: addr.to_string(),
@@ -320,6 +364,7 @@ pub async fn run(cfg: &Config, host: &str, port: u16) -> Result<(), TubeforgeErr
         data_dir: cfg.data_dir.clone(),
         own_channel: cfg.own_channel.clone(),
         kg: Arc::new(std::sync::Mutex::new(None)),
+        sync_status: Arc::new(std::sync::Mutex::new(initial_sync_status)),
     };
     let (router, serve_state) = app(state);
     web::serve(listener, Arc::new(router), serve_state)

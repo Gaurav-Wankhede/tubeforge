@@ -148,24 +148,24 @@ pub async fn send(
 // sha1: tiny SHA-1 for the WS handshake (no external dep).
 // ---------------------------------------------------------------------------
 mod sha1 {
-    pub struct Sha1 {
+    pub(super) struct Sha1 {
         state: [u32; 5],
         buffer: Vec<u8>,
     }
 
     impl Sha1 {
-        pub fn new() -> Self {
+        pub(super) fn new() -> Self {
             Sha1 {
                 state: [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0],
                 buffer: Vec::new(),
             }
         }
 
-        pub fn update(&mut self, data: &[u8]) {
+        pub(super) fn update(&mut self, data: &[u8]) {
             self.buffer.extend_from_slice(data);
         }
 
-        pub fn digest(&self) -> Digest {
+        pub(super) fn digest(&self) -> Digest {
             let mut msg = self.buffer.clone();
             let bit_len = (msg.len() as u64) * 8;
             msg.push(0x80);
@@ -214,12 +214,12 @@ mod sha1 {
         }
     }
 
-    pub struct Digest {
+    pub(super) struct Digest {
         bytes: [u8; 20],
     }
 
     impl Digest {
-        pub fn bytes(self) -> [u8; 20] {
+        pub(super) fn bytes(self) -> [u8; 20] {
             self.bytes
         }
     }

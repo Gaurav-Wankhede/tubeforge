@@ -391,9 +391,7 @@ async fn p3_check_availability_requires_key() {
 
 #[tokio::test]
 async fn p3_filmot_get_requires_key() {
-    // SAFETY: test-only environment variable cleanup.
-    unsafe { std::env::remove_var(filmot::FILMOT_KEY_ENV); }
-    let err = filmot::run_get("dQw4w9WgXcQ")
+    let err = filmot::run_get_with_key("dQw4w9WgXcQ", None)
         .await
         .expect_err("no key → error");
     assert!(

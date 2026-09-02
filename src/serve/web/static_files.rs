@@ -4,7 +4,7 @@
 //! path that is not an existing file, serves `index.html` — the SPA shell —
 //! so client-side routing works. Replaces `tower-http`'s `ServeDir`/`ServeFile`.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use http::{Method, Response as HttpResponse, StatusCode};
 
@@ -76,10 +76,4 @@ fn not_found() -> Response {
         .status(StatusCode::NOT_FOUND)
         .body(super::full(hyper::body::Bytes::from("not found")))
         .expect("404 response")
-}
-
-/// Verify the file is within the root (defense-in-depth for the `..` check).
-#[allow(dead_code)]
-fn is_within(root: &Path, file: &Path) -> bool {
-    file.starts_with(root)
 }

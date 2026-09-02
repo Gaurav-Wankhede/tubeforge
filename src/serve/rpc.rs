@@ -220,6 +220,12 @@ pub(crate) async fn dispatch(state: AppState, sender: RpcSender, req: RpcRequest
         "alerts.list" => handle_alerts_list(&state, &sender, &params).await,
         "audit.get" => handle_audit(&state, &sender, &params).await,
         "channels.snapshots" => handle_channels_snapshots(&state, &sender, &params).await,
+        "kanban.list" => handle_kanban_list(&state, &sender, &params).await,
+        "kanban.create" => handle_kanban_create(&state, &sender, &params).await,
+        "kanban.from-research" => handle_kanban_from_research(&state, &sender, &params).await,
+        "kanban.move" => handle_kanban_move(&state, &sender, &params).await,
+        "kanban.prompt" => handle_kanban_prompt(&state, &sender, &params).await,
+        "kanban.delete" => handle_kanban_delete(&state, &sender, &params).await,
         _ => Err(TubeforgeError::Usage(format!("unknown method: {method}"))),
     };
 
@@ -1501,4 +1507,283 @@ async fn handle_audit(
     // creator's OWN channel — not competitor observations.
     let actions = crate::analytics::actions::from_audit(&audit);
     Ok(json!({ "audit": audit, "actions": actions }))
+}
+
+// ---------------------------------------------------------------------------
+// Kanban RPC Handlers (Phase 7 Real-Time Creator Cockpit)
+// ---------------------------------------------------------------------------
+
+async fn handle_kanban_list(
+    state: &AppState,
+    sender: &RpcSender,
+    params: &HashMap<String, Value>,
+) -> Result<Value, TubeforgeError> {
+    progress(sender, &Value::Null, 0.5, "Loading Kanban tickets...").await;
+    let status = params.get("status").and_then(|v| v.as_str());
+    let channel = params.get("channel").and_then(|v| v.as_str());
+    let tickets = state.db.list_kanban_tickets(status, channel).await?;
+
+    let mut todo_count = 0;
+    let mut inprogress_count = 0;
+    let mut done_count = 0;
+    let mut published_count = 0;
+
+    for t in &tickets {
+        match t.status.as_str() {
+            "todo" => todo_count += 1,
+            "inprogress" => inprogress_count += 1,
+            "done" => done_count += 1,
+            "published" => published_count += 1,
+            _ => {}
+        }
+    }
+
+    Ok(json!({
+        "summary": {
+            "total": tickets.len(),
+            "todo": todo_count,
+            "inprogress": inprogress_count,
+            "done": done_count,
+            "published": published_count,
+        },
+        "tickets": tickets,
+    }))
+}
+
+async fn handle_kanban_create(
+    state: &AppState,
+    _sender: &RpcSender,
+    params: &HashMap<String, Value>,
+) -> Result<Value, TubeforgeError> {
+    let title = params
+        .get("title")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| TubeforgeError::Usage("missing required param: title".into()))?;
+    let channel = params
+        .get("channel")
+        .and_then(|v| v.as_str())
+        .unwrap_or("TECHVERSE");
+    let status = params
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("todo")
+        .to_lowercase();
+    let topic = params.get("topic").and_then(|v| v.as_str()).map(str::to_string);
+    let framework = params.get("framework").and_then(|v| v.as_str()).map(str::to_string);
+    let duration = params.get("optimal_duration_sec").and_then(|v| v.as_i64());
+    let target_kw = params.get("target_keyword").and_then(|v| v.as_str()).map(str::to_string);
+    let youtube_url = params.get("youtube_url").and_then(|v| v.as_str()).map(str::to_string);
+    let notes = params.get("notes").and_then(|v| v.as_str()).map(str::to_string);
+
+    let now = crate::util::now_rfc3339();
+    let ticket_id = format!("ticket-{}", crate::util::nanoid(8));
+
+    let ticket = crate::storage::db::KanbanTicketRow {
+        ticket_id: ticket_id.clone(),
+        title: title.to_string(),
+        channel: channel.to_uppercase(),
+        status,
+        topic: topic.clone(),
+        framework,
+        optimal_duration_sec: duration,
+        target_keyword: target_kw,
+        youtube_url,
+        video_id: None,
+        research_ref: topic,
+        notes,
+        created_at: now.clone(),
+        updated_at: now,
+    };
+
+    state.db.create_kanban_ticket(&ticket).await?;
+
+    Ok(json!({
+        "ticket": ticket,
+        "message": format!("Kanban ticket {ticket_id} created successfully")
+    }))
+}
+
+async fn handle_kanban_from_research(
+    state: &AppState,
+    _sender: &RpcSender,
+    params: &HashMap<String, Value>,
+) -> Result<Value, TubeforgeError> {
+    let topic = params
+        .get("topic")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| TubeforgeError::Usage("missing required param: topic".into()))?;
+    let channel = params
+        .get("channel")
+        .and_then(|v| v.as_str())
+        .unwrap_or("TECHVERSE");
+    let title_override = params.get("title").and_then(|v| v.as_str());
+    let framework = params.get("framework").and_then(|v| v.as_str());
+    let duration = params.get("optimal_duration_sec").and_then(|v| v.as_i64());
+
+    let now = crate::util::now_rfc3339();
+    let research_opt = state.db.get_keyword_research(topic).await?;
+    let title = match title_override {
+        Some(t) => t.to_string(),
+        None => match &research_opt {
+            Some(r) => format!("{} — Visual Breakdown & Mental Model", r.keyword),
+            None => format!("{topic} — Visual Breakdown & Mental Model"),
+        },
+    };
+    let target_kw = Some(match &research_opt {
+        Some(r) => r.keyword.clone(),
+        None => topic.to_string(),
+    });
+    let suggested_tags_count = research_opt
+        .as_ref()
+        .and_then(|r| serde_json::from_str::<Vec<Value>>(&r.suggested_tags).ok())
+        .map_or(0, |tags| tags.len());
+
+    let ticket_id = format!("ticket-{}", crate::util::nanoid(8));
+    let ticket = crate::storage::db::KanbanTicketRow {
+        ticket_id: ticket_id.clone(),
+        title,
+        channel: channel.to_uppercase(),
+        status: "todo".to_string(),
+        topic: Some(topic.to_string()),
+        framework: framework.map(str::to_string),
+        optimal_duration_sec: duration.or(Some(720)),
+        target_keyword: target_kw,
+        youtube_url: None,
+        video_id: None,
+        research_ref: Some(topic.to_string()),
+        notes: Some(format!(
+            "Mapped from research topic '{topic}' (linked suggested tags: {suggested_tags_count})"
+        )),
+        created_at: now.clone(),
+        updated_at: now,
+    };
+
+    state.db.create_kanban_ticket(&ticket).await?;
+
+    Ok(json!({
+        "ticket": ticket,
+        "research_interconnected": research_opt.is_some(),
+        "message": format!("Kanban ticket {ticket_id} created from research for '{topic}'")
+    }))
+}
+
+async fn handle_kanban_move(
+    state: &AppState,
+    _sender: &RpcSender,
+    params: &HashMap<String, Value>,
+) -> Result<Value, TubeforgeError> {
+    let ticket_id = params
+        .get("ticket_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| TubeforgeError::Usage("missing required param: ticket_id".into()))?;
+    let status = params
+        .get("status")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| TubeforgeError::Usage("missing required param: status".into()))?;
+    let youtube_url = params.get("youtube_url").and_then(|v| v.as_str());
+    let video_id = params.get("video_id").and_then(|v| v.as_str());
+
+    let updated = state
+        .db
+        .move_kanban_ticket(ticket_id, status, youtube_url, video_id)
+        .await?;
+
+    Ok(json!({
+        "ticket": updated,
+        "message": format!("Ticket {ticket_id} status updated to '{status}'")
+    }))
+}
+
+async fn handle_kanban_prompt(
+    state: &AppState,
+    _sender: &RpcSender,
+    params: &HashMap<String, Value>,
+) -> Result<Value, TubeforgeError> {
+    let ticket_id = params
+        .get("ticket_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| TubeforgeError::Usage("missing required param: ticket_id".into()))?;
+
+    let Some(ticket) = state.db.get_kanban_ticket(ticket_id).await? else {
+        return Err(TubeforgeError::Usage(format!(
+            "Kanban ticket not found: {ticket_id}"
+        )));
+    };
+
+    let research = if let Some(topic) = &ticket.topic {
+        state.db.get_keyword_research(topic).await?
+    } else {
+        None
+    };
+
+    let duration_min = ticket.optimal_duration_sec.unwrap_or(720) / 60;
+    let framework = ticket.framework.as_deref().unwrap_or("Core Mental Model");
+    let topic = ticket.topic.as_deref().unwrap_or(&ticket.title);
+
+    let prompt = format!(
+        r#"# Production Blueprint — {title}
+Channel — {channel} | Target Duration — {duration_min} min ({duration_sec}s)
+Framework — {framework} | Topic — {topic}
+Status — {status}
+
+## 1. FIRST-SCREEN RETENTION CONTRACT (0:00 - 1:00)
+- 0:00 - 0:15 [HOOK] — Introduce the central contradiction in {framework}. Zero fluff.
+- 0:15 - 0:35 [EXPLICIT PAYOFF] — Guarantee what the viewer will understand in the next {duration_min} minutes.
+- 0:35 - 1:00 [ENGINEERING / CONCEPTUAL VEHICLE] — Establish the core visual mental model on pure black `#000000`.
+
+## 2. INTERCONNECTED RESEARCH SIGNALS
+- Target Keyword — {kw}
+- SEO Competition / Opportunity Score — {opp_score}
+- Interconnected Research Topic — {research_topic}
+
+## 3. VISUAL GRAPHICS SPECIFICATION
+- Mobile-First Minimalist Diagramming — Max 3–5 floating nodes per state.
+- Pure black `#000000` canvas, 0 card wrappers, 0 text walls.
+- Spoken voiceover carries the verbal story; visual canvas carries the spatial diagram.
+- 100% self-explanatory on screen in <2 seconds.
+"#,
+        title = ticket.title,
+        channel = ticket.channel,
+        duration_min = duration_min,
+        duration_sec = ticket.optimal_duration_sec.unwrap_or(720),
+        framework = framework,
+        topic = topic,
+        status = ticket.status,
+        kw = ticket.target_keyword.as_deref().unwrap_or("N/A"),
+        opp_score = research
+            .as_ref()
+            .map(|r| format!("{:.1}", r.opportunity_score))
+            .unwrap_or_else(|| "N/A".to_string()),
+        research_topic = ticket.research_ref.as_deref().unwrap_or("N/A"),
+    );
+
+    Ok(json!({
+        "ticket_id": ticket.ticket_id,
+        "title": ticket.title,
+        "channel": ticket.channel,
+        "prompt": prompt,
+    }))
+}
+
+async fn handle_kanban_delete(
+    state: &AppState,
+    _sender: &RpcSender,
+    params: &HashMap<String, Value>,
+) -> Result<Value, TubeforgeError> {
+    let ticket_id = params
+        .get("ticket_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| TubeforgeError::Usage("missing required param: ticket_id".into()))?;
+
+    let deleted = state.db.delete_kanban_ticket(ticket_id).await?;
+
+    Ok(json!({
+        "ticket_id": ticket_id,
+        "deleted": deleted,
+        "message": if deleted {
+            format!("Ticket {ticket_id} deleted")
+        } else {
+            format!("Ticket {ticket_id} not found")
+        }
+    }))
 }

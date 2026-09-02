@@ -196,11 +196,14 @@ impl YtdlpClient {
             .await
             .map_err(|e| storage_err("YTD LP_SEM", e))?;
 
+        let profile = crate::fetch::innertube::next_ua_profile();
         let base = self.common_args(&[
             "--dump-json",
             "--skip-download",
             "--no-playlist",
             "--no-warnings",
+            "--user-agent",
+            profile.ua,
             &format!("https://www.youtube.com/watch?v={video_id}"),
         ]);
         let output = Command::new(&self.binary)
@@ -344,7 +347,7 @@ impl YtdlpClient {
         query: &str,
         n: u64,
     ) -> Result<Vec<YtdlpSearchResult>, TubeforgeError> {
-        self.search_with(&format!("ytsearchdate{n}:{query}")).await
+        self.search_with(&format!("ytsearch{n}:{query}")).await
     }
 
     /// Shared implementation of a `ytsearch*` run with FULL extraction
@@ -431,6 +434,15 @@ impl YtdlpClient {
                         .collect()
                 })
                 .unwrap_or_default();
+            let description = raw
+                .get("description")
+                .and_then(serde_json::Value::as_str)
+                .map(String::from);
+            let duration_sec = raw.get("duration").and_then(serde_json::Value::as_i64);
+            let thumbnail = raw
+                .get("thumbnail")
+                .and_then(serde_json::Value::as_str)
+                .map(String::from);
             out.push(YtdlpSearchResult {
                 video_id: id.to_string(),
                 title: raw
@@ -438,6 +450,9 @@ impl YtdlpClient {
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or_default()
                     .to_string(),
+                description,
+                duration_sec,
+                thumbnail,
                 channel: raw
                     .get("channel")
                     .and_then(serde_json::Value::as_str)
@@ -467,6 +482,9 @@ impl YtdlpClient {
 pub struct YtdlpSearchResult {
     pub video_id: String,
     pub title: String,
+    pub description: Option<String>,
+    pub duration_sec: Option<i64>,
+    pub thumbnail: Option<String>,
     pub channel: String,
     pub channel_id: String,
     pub view_count: Option<i64>,
@@ -542,6 +560,7 @@ pub struct YtdlpVideoInfo {
     pub heatmap: Vec<(f64, f64)>,
     pub automatic_captions: Vec<String>,
     pub extractor_error: Option<String>,
+    pub thumbnail: Option<String>,
 }
 
 impl YtdlpVideoInfo {
@@ -608,6 +627,7 @@ impl YtdlpVideoInfo {
                 .map(|o| o.keys().cloned().collect())
                 .unwrap_or_default(),
             extractor_error: s("extractor_error"),
+            thumbnail: s("thumbnail"),
         })
     }
 }

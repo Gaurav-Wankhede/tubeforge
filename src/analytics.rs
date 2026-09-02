@@ -27,3 +27,8 @@ pub mod reports;
 pub mod research;
 pub mod tags;
 pub mod topic_generator;
+pub mod trust;
+pub mod beachhead;
+pub mod session;
+pub mod monopoly;
+pub mod chronology;

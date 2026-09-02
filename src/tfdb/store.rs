@@ -46,6 +46,8 @@ impl Value {
         match self {
             Value::Int(i) => Some(*i),
             Value::Float(f) => Some(*f as i64),
+            Value::Text(s) => s.parse::<i64>().ok(),
+            Value::Json(serde_json::Value::Number(n)) => n.as_i64(),
             _ => None,
         }
     }
@@ -53,6 +55,8 @@ impl Value {
         match self {
             Value::Float(f) => Some(*f),
             Value::Int(i) => Some(*i as f64),
+            Value::Text(s) => s.parse::<f64>().ok(),
+            Value::Json(serde_json::Value::Number(n)) => n.as_f64(),
             _ => None,
         }
     }
@@ -128,6 +132,8 @@ pub struct Engine {
     /// Strict column checking: reject unknown columns on insert (default
     /// true). Tests that exercise the legacy raw path may disable it.
     strict: bool,
+    last_dat_len: u64,
+    last_wal_len: u64,
 }
 
 /// A staged, single-writer transaction.
@@ -183,19 +189,28 @@ impl Engine {
             wal: None,
             options,
             strict: true,
+            last_dat_len: 0,
+            last_wal_len: 0,
         };
 
         engine.load_checkpoint()?;
         engine.replay_wal()?;
         engine.open_wal_for_append()?;
+        engine.last_dat_len = std::fs::metadata(engine.dat_path()).map(|m| m.len()).unwrap_or(0);
+        engine.last_wal_len = std::fs::metadata(engine.wal_path()).map(|m| m.len()).unwrap_or(0);
         Ok(engine)
     }
 
-    /// Re-read the checkpoint and re-replay the WAL from disk, replacing the
-    /// in-memory snapshot so this engine observes every write committed by any
-    /// handle to the same database file. Retains the in-memory schema
-    /// registrations (created at open, not necessarily checkpointed yet).
+    /// Re-read the checkpoint and re-replay the WAL from disk only if changed on disk.
+    /// Retains the in-memory schema registrations.
     pub fn reload(&mut self) -> Result<(), TubeforgeError> {
+        let cur_dat_len = std::fs::metadata(self.dat_path()).map(|m| m.len()).unwrap_or(0);
+        let cur_wal_len = std::fs::metadata(self.wal_path()).map(|m| m.len()).unwrap_or(0);
+
+        if cur_dat_len == self.last_dat_len && cur_wal_len == self.last_wal_len && !self.data.is_empty() {
+            return Ok(());
+        }
+
         let schema = std::mem::take(&mut self.tables);
         self.data.clear();
         self.uniques.clear();
@@ -204,6 +219,9 @@ impl Engine {
             self.tables.entry(name).or_insert(sch);
         }
         self.replay_wal()?;
+        self.open_wal_for_append()?;
+        self.last_dat_len = std::fs::metadata(self.dat_path()).map(|m| m.len()).unwrap_or(0);
+        self.last_wal_len = std::fs::metadata(self.wal_path()).map(|m| m.len()).unwrap_or(0);
         Ok(())
     }
 
@@ -310,10 +328,9 @@ impl Engine {
             .map_err(|e| storage_err("WAL", e.to_string()))?;
         wal.write_all(&crc.to_le_bytes())
             .map_err(|e| storage_err("WAL", e.to_string()))?;
-        if self.options.fsync_on_commit {
-            wal.sync_all()
-                .map_err(|e| storage_err("WAL", e.to_string()))?;
-        }
+        wal.sync_all()
+            .map_err(|e| storage_err("WAL", e.to_string()))?;
+        self.last_wal_len = std::fs::metadata(self.wal_path()).map(|m| m.len()).unwrap_or(0);
         Ok(())
     }
 
@@ -375,6 +392,8 @@ impl Engine {
         std::fs::rename(&tmp, &dat_path)
             .map_err(|e| storage_err("IO", format!("rename {}: {e}", tmp.display())))?;
         self.truncate_wal()?;
+        self.last_dat_len = std::fs::metadata(self.dat_path()).map(|m| m.len()).unwrap_or(0);
+        self.last_wal_len = 0;
         Ok(self.count_all())
     }
 
@@ -511,6 +530,10 @@ impl Engine {
 
     pub fn strict(&self) -> bool {
         self.strict
+    }
+
+    pub fn options(&self) -> &EngineOptions {
+        &self.options
     }
 }
 

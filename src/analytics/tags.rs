@@ -151,15 +151,45 @@ pub async fn video_tags(db: &Db, video_id: &str) -> Result<VideoTagsResponse, Tu
     // If no normalized tags, fall back to JSON in videos.tags
     let tags = if tags.is_empty() {
         let json_tags: Vec<String> = serde_json::from_str(&video.tags).unwrap_or_default();
-        json_tags
-            .into_iter()
-            .enumerate()
-            .map(|(pos, name)| VideoTag {
-                name,
-                position: pos as i64,
-                source: TagSource::Youtube,
-            })
-            .collect()
+        if !json_tags.is_empty() {
+            json_tags
+                .into_iter()
+                .enumerate()
+                .map(|(pos, name)| VideoTag {
+                    name,
+                    position: pos as i64,
+                    source: TagSource::Youtube,
+                })
+                .collect()
+        } else {
+            // Extract semantic tags from hashtags and title keyphrases
+            let mut extracted = Vec::new();
+            for word in video.description.split_whitespace() {
+                if word.starts_with('#') && word.len() > 1 {
+                    let clean = word.trim_start_matches('#').trim_matches(|c: char| !c.is_alphanumeric() && c != '_');
+                    if !clean.is_empty() && !extracted.contains(&clean.to_lowercase()) {
+                        extracted.push(clean.to_lowercase());
+                    }
+                }
+            }
+            let clean_title = video.title.replace(['|', '-', '—', ':', '(', ')', '[', ']'], " ");
+            for chunk in clean_title.split_whitespace() {
+                let c = chunk.trim_matches(|ch: char| !ch.is_alphanumeric()).to_lowercase();
+                if c.len() >= 3 && !extracted.contains(&c) && !["the", "and", "for", "with", "this", "from", "video"].contains(&c.as_str()) {
+                    extracted.push(c);
+                }
+            }
+            extracted
+                .into_iter()
+                .take(12)
+                .enumerate()
+                .map(|(pos, name)| VideoTag {
+                    name,
+                    position: pos as i64,
+                    source: TagSource::Extracted,
+                })
+                .collect()
+        }
     } else {
         tags
     };

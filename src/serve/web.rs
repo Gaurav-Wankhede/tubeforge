@@ -228,6 +228,45 @@ impl Router {
         self
     }
 
+    /// Register a PATCH route (idempotent selective updates).
+    pub fn patch<F, Args>(mut self, path: &str, handler: F) -> Self
+    where
+        F: IntoHandler<Args> + Send + Sync + 'static,
+    {
+        self.routes.push(Route {
+            method: Method::PATCH,
+            pattern: PathPattern::parse(path),
+            handler: handler.into_handler(),
+        });
+        self
+    }
+
+    /// Register a DELETE route.
+    pub fn delete<F, Args>(mut self, path: &str, handler: F) -> Self
+    where
+        F: IntoHandler<Args> + Send + Sync + 'static,
+    {
+        self.routes.push(Route {
+            method: Method::DELETE,
+            pattern: PathPattern::parse(path),
+            handler: handler.into_handler(),
+        });
+        self
+    }
+
+    /// Register a PUT route.
+    pub fn put<F, Args>(mut self, path: &str, handler: F) -> Self
+    where
+        F: IntoHandler<Args> + Send + Sync + 'static,
+    {
+        self.routes.push(Route {
+            method: Method::PUT,
+            pattern: PathPattern::parse(path),
+            handler: handler.into_handler(),
+        });
+        self
+    }
+
     /// Set the fallback handler (called when no route matches).
     pub fn fallback<F, Args>(mut self, handler: F) -> Self
     where
@@ -355,6 +394,42 @@ where
 {
     MethodRouter {
         method: Method::POST,
+        handler: handler.into_handler(),
+        _marker: std::marker::PhantomData,
+    }
+}
+
+/// Free function: register a PATCH route (idempotent selective updates).
+pub fn patch<F, Args>(handler: F) -> MethodRouter<Args>
+where
+    F: IntoHandler<Args> + Send + Sync + 'static,
+{
+    MethodRouter {
+        method: Method::PATCH,
+        handler: handler.into_handler(),
+        _marker: std::marker::PhantomData,
+    }
+}
+
+/// Free function: register a DELETE route.
+pub fn delete<F, Args>(handler: F) -> MethodRouter<Args>
+where
+    F: IntoHandler<Args> + Send + Sync + 'static,
+{
+    MethodRouter {
+        method: Method::DELETE,
+        handler: handler.into_handler(),
+        _marker: std::marker::PhantomData,
+    }
+}
+
+/// Free function: register a PUT route.
+pub fn put<F, Args>(handler: F) -> MethodRouter<Args>
+where
+    F: IntoHandler<Args> + Send + Sync + 'static,
+{
+    MethodRouter {
+        method: Method::PUT,
         handler: handler.into_handler(),
         _marker: std::marker::PhantomData,
     }
@@ -550,7 +625,6 @@ where
 macro_rules! impl_handler {
     ($(($($T:ident),*)),* $(,)?) => {
         $(
-            #[allow(unreachable_patterns, unused_variables, non_snake_case)]
             impl<F, Fut, R, $($T),*> IntoHandler<($($T,)*)> for F
             where
                 F: Fn($($T),*) -> Fut + Copy + Send + Sync + 'static,
@@ -559,10 +633,10 @@ macro_rules! impl_handler {
                 $($T: FromParts + Send,)*
             {
                 fn into_handler(self) -> Handler {
-                    box_parts(move |parts: RequestParts| {
+                    box_parts(move |_parts: RequestParts| {
                         let f = self; // F: Copy — clone for each request
                         Box::pin(async move {
-                            match ($($T::from_parts(&parts),)*) {
+                            match ($($T::from_parts(&_parts),)*) {
                                 ($(Ok($T),)*) => {
                                     let fut = f($($T),*);
                                     fut.await.into_response()

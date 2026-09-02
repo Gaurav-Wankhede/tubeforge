@@ -115,24 +115,32 @@ impl Weights {
         }
     }
 
-    /// Defaults overlaid with env overrides. Bad values are a `Config` error.
-    pub fn from_env() -> Result<Self, TubeforgeError> {
+    /// Resolve weights from a generic variable lookup function.
+    pub fn from_lookup<F>(lookup: F) -> Result<Self, TubeforgeError>
+    where
+        F: Fn(&str) -> Option<String>,
+    {
         let mut w = Weights::defaults();
-        w.seo_group = env_f64("TUBEFORGE_WEIGHTS_SEO", w.seo_group)?;
-        w.geo_group = env_f64("TUBEFORGE_WEIGHTS_GEO", w.geo_group)?;
+        w.seo_group = lookup_f64(&lookup, "TUBEFORGE_WEIGHTS_SEO", w.seo_group)?;
+        w.geo_group = lookup_f64(&lookup, "TUBEFORGE_WEIGHTS_GEO", w.geo_group)?;
         for key in SEO_COMPONENTS {
             w.seo.insert(
                 key.to_string(),
-                env_f64(&env_key("TUBEFORGE_SEO_", key), w.seo[key])?,
+                lookup_f64(&lookup, &env_key("TUBEFORGE_SEO_", key), w.seo[key])?,
             );
         }
         for key in GEO_COMPONENTS {
             w.geo.insert(
                 key.to_string(),
-                env_f64(&env_key("TUBEFORGE_GEO_", key), w.geo[key])?,
+                lookup_f64(&lookup, &env_key("TUBEFORGE_GEO_", key), w.geo[key])?,
             );
         }
         Ok(w)
+    }
+
+    /// Defaults overlaid with env overrides. Bad values are a `Config` error.
+    pub fn from_env() -> Result<Self, TubeforgeError> {
+        Self::from_lookup(|var| std::env::var(var).ok())
     }
 
     pub fn seo_weight(&self, key: &str) -> f64 {
@@ -159,9 +167,12 @@ fn env_key(prefix: &str, component: &str) -> String {
     format!("{prefix}{}", component.to_ascii_uppercase())
 }
 
-/// Read an env var as a non-negative f64, falling back to `default`.
-fn env_f64(var: &str, default: f64) -> Result<f64, TubeforgeError> {
-    let Ok(raw) = std::env::var(var) else {
+/// Read a variable as a non-negative f64, falling back to `default`.
+fn lookup_f64<F>(lookup: &F, var: &str, default: f64) -> Result<f64, TubeforgeError>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let Some(raw) = lookup(var) else {
         return Ok(default);
     };
     let v: f64 = raw
@@ -178,11 +189,6 @@ fn env_f64(var: &str, default: f64) -> Result<f64, TubeforgeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    /// Env vars are process-global; parallel tests would race on them. Every
-    /// env-mutating test holds this lock for its whole body.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn defaults_sum_to_one_per_group() {
@@ -208,20 +214,16 @@ mod tests {
         }
     }
 
-    /// Env overrides + defaults. Kept in ONE test fn (plus lock): env vars
-    /// are process global, so parallel tests would race on them.
     #[test]
     fn env_overrides_and_defaults() {
-        let _lock = ENV_LOCK.lock().expect("env lock");
-        let _guard = EnvGuard::set(&[
-            ("TUBEFORGE_WEIGHTS_SEO", "0.7"),
-            ("TUBEFORGE_WEIGHTS_GEO", "1.3"),
-            ("TUBEFORGE_SEO_KEYWORD_TITLE", "0.5"),
-            ("TUBEFORGE_GEO_ENTITY_COVERAGE", "0.9"),
-            ("TUBEFORGE_SEO_NO_SUCH", "0.1"), // ignored: unknown key
-        ]);
+        let mut map = std::collections::HashMap::new();
+        map.insert("TUBEFORGE_WEIGHTS_SEO", "0.7");
+        map.insert("TUBEFORGE_WEIGHTS_GEO", "1.3");
+        map.insert("TUBEFORGE_SEO_KEYWORD_TITLE", "0.5");
+        map.insert("TUBEFORGE_GEO_ENTITY_COVERAGE", "0.9");
+        map.insert("TUBEFORGE_SEO_NO_SUCH", "0.1");
 
-        let w = Weights::from_env().expect("parse");
+        let w = Weights::from_lookup(|k| map.get(k).map(|s| (*s).to_string())).expect("parse");
         assert_eq!(w.seo_group, 0.7);
         assert_eq!(w.geo_group, 1.3);
         assert_eq!(w.seo_weight("keyword_title"), 0.5);
@@ -240,46 +242,17 @@ mod tests {
 
     #[test]
     fn env_bad_number_is_config_error() {
-        let _lock = ENV_LOCK.lock().expect("env lock");
-        let _guard = EnvGuard::set(&[("TUBEFORGE_SEO_KEYWORD_TITLE", "not-a-number")]);
-        let err = Weights::from_env().expect_err("bad env value");
+        let mut map = std::collections::HashMap::new();
+        map.insert("TUBEFORGE_SEO_KEYWORD_TITLE", "not-a-number");
+        let err = Weights::from_lookup(|k| map.get(k).map(|s| (*s).to_string())).expect_err("bad env value");
         assert!(matches!(err, TubeforgeError::Config(_)), "got {err:?}");
     }
 
     #[test]
     fn env_negative_is_config_error() {
-        let _lock = ENV_LOCK.lock().expect("env lock");
-        let _guard = EnvGuard::set(&[("TUBEFORGE_WEIGHTS_SEO", "-1.0")]);
-        let err = Weights::from_env().expect_err("negative env value");
+        let mut map = std::collections::HashMap::new();
+        map.insert("TUBEFORGE_WEIGHTS_SEO", "-1.0");
+        let err = Weights::from_lookup(|k| map.get(k).map(|s| (*s).to_string())).expect_err("negative env value");
         assert!(matches!(err, TubeforgeError::Config(_)), "got {err:?}");
-    }
-
-    /// Sets env vars for the duration of one test, restoring on drop.
-    struct EnvGuard(Vec<(String, Option<String>)>);
-
-    impl EnvGuard {
-        fn set(kvs: &[(&str, &str)]) -> Self {
-            let mut saved = Vec::new();
-            for (k, v) in kvs {
-                saved.push((k.to_string(), std::env::var(k).ok()));
-                // SAFETY: test-only environment variable isolation.
-                unsafe { std::env::set_var(k, v); }
-            }
-            EnvGuard(saved)
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            for (k, prev) in &self.0 {
-                // SAFETY: test-only environment variable isolation.
-                unsafe {
-                    match prev {
-                        Some(v) => std::env::set_var(k, v),
-                        None => std::env::remove_var(k),
-                    }
-                }
-            }
-        }
     }
 }

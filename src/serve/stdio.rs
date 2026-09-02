@@ -46,6 +46,7 @@ pub async fn run(cfg: &Config) -> Result<(), TubeforgeError> {
         data_dir: cfg.data_dir.clone(),
         own_channel: cfg.own_channel.clone(),
         kg: Arc::new(std::sync::Mutex::new(None)),
+        sync_status: Arc::new(std::sync::Mutex::new(Default::default())),
     };
     serve_stdio(state).await
 }

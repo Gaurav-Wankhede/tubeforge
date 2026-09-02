@@ -80,7 +80,6 @@ pub fn compute(
 /// categories) feeding the C1/C2 GEO components. Mirrors `compute`'s seven
 /// parameters plus the metadata input — clippy's 7-arg ceiling is waived
 /// deliberately so both entry points stay symmetric.
-#[allow(clippy::too_many_arguments)]
 pub fn compute_with_meta(
     title: &str,
     desc: &str,
@@ -115,7 +114,6 @@ pub fn compute_with_meta(
 /// - `topic_dominance_scores`: (channel_id, topic) → dominance score
 /// - `kw_channel_edges`: keyword-channel dominance edges
 /// - `channel_id`: the video's channel (for topic_dominance lookup)
-#[allow(clippy::too_many_arguments)]
 pub fn compute_with_graph(
     title: &str,
     desc: &str,

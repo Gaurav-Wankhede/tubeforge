@@ -1,7 +1,7 @@
 {
   "name": "frontend",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -13,14 +13,20 @@
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
+    "@sveltejs/vite-plugin-svelte": "^5.0.0",
     "@tanstack/react-query": "^5.101.4",
     "@tanstack/react-table": "^9.0.0",
+    "clsx": "^2.1.1",
     "lucide-react": "^1.28.0",
+    "lucide-svelte": "^1.0.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-hot-toast": "^2.6.0",
     "react-router-dom": "^7.18.2",
-    "recharts": "^3.10.1"
+    "recharts": "^3.10.1",
+    "svelte": "^5.0.0",
+    "svelte-dnd-action": "^0.9.79",
+    "tailwind-merge": "^3.6.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",

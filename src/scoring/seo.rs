@@ -144,7 +144,6 @@ pub fn compute(
 /// - `kw_channel_edges`: keyword-channel dominance edges
 ///
 /// When any of these is `None`, the corresponding component scores 0.
-#[allow(clippy::too_many_arguments)]
 pub fn compute_with_graph(
     title: &str,
     desc: &str,

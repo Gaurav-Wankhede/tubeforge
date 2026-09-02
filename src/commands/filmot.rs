@@ -31,8 +31,12 @@ const FILMOT_API: &str = "https://filmot.com/api/getvideos";
 pub const FILMOT_KEY_ENV: &str = "TUBEFORGE_FILMOT_KEY";
 
 pub async fn run_get(video_id: &str) -> Result<Value, TubeforgeError> {
-    let key = std::env::var(FILMOT_KEY_ENV)
-        .ok()
+    let env_val = std::env::var(FILMOT_KEY_ENV).ok();
+    run_get_with_key(video_id, env_val.as_deref()).await
+}
+
+pub async fn run_get_with_key(video_id: &str, key_override: Option<&str>) -> Result<Value, TubeforgeError> {
+    let key = key_override
         .map(|k| k.trim().to_string())
         .filter(|k| !k.is_empty())
         .ok_or_else(|| {

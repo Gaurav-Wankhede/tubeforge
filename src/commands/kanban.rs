@@ -174,7 +174,6 @@ pub async fn run_move(
 }
 
 /// Update fields on an existing Kanban ticket.
-#[allow(clippy::too_many_arguments)]
 pub async fn run_update(
     cfg: &Config,
     ticket_id: &str,

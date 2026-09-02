@@ -138,7 +138,6 @@ pub async fn run_forecast(
 }
 
 /// Forecast channel growth from `channel_snapshots` (total_views over time).
-#[allow(clippy::type_complexity)]
 fn forecast_channel(
     snaps: &[(String, Option<i64>, Option<i64>, Option<i64>)],
     horizon: f64,

@@ -175,7 +175,7 @@ TubeForge provides a unified CLI interface. Every command supports the `--json` 
 | `tubeforge ingest channels <id>...` | Ingests ~15 most recent videos per channel via RSS (ETag-aware). |
 | `tubeforge ingest links` | Ingests video metadata from newline-separated URLs via oEmbed. |
 | `tubeforge refresh` | Re-fetches all indexed channels; skips writes on HTTP 304 Not Modified. |
-| `tubeforge transcript get <id>` | Extracts manual and auto-generated video captions via `yt-dlp`. |
+| `tubeforge transcript get <id>` | Extracts manual and auto-generated video captions via `yt-dlp`; `--engine whisper|auto` falls back to local Whisper ASR (`vectron-whisper` GGML, shared with Vectron, offline `source="whisper_local"`). |
 | `tubeforge metadata <id>` | Ingests audience retention heatmaps and live engagement statistics. |
 | `tubeforge comments get <id>` | Ingests audience comments for community feedback analysis. |
 
@@ -228,6 +228,10 @@ TubeForge provides a unified CLI interface. Every command supports the `--json` 
 ---
 
 ## Technical Architecture
+
+### 0. Shared Whisper ASR — Vectron Interconnect
+
+- **Vectron-Whisper Bridge:** `tubeforge transcript get --engine whisper|auto` shares Vectron's Rust `vectron-whisper` crate (`whisper-rs`/`whisper.cpp` GGML, `symphonia`→`rubato` 16kHz mono, `normalize()`+WER) via path dep `../vectron/crates/vectron-whisper`. When `yt-dlp` captions are disabled, TubeForge extracts bestaudio then transcribes offline with shared model cache `<data>/models/whisper/ggml-base.bin`; same engine powers Vectron `VEC-008` (`SCRIPT.md` vs `voice/0N.wav`). Zero API cost, zero cloud.
 
 ### 1. Storage Engine (`tfdb`)
 - **Write-Ahead Log (`.wal`)**: Append-only log ensuring transactional ACID durability and high write throughput.

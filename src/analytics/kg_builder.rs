@@ -488,7 +488,7 @@ fn kg_entity_from_row(row: &crate::storage::db::KgEntityRow) -> KgEntity {
 
 fn kg_relation_from_row(row: &crate::storage::db::KgRelationRow) -> KgRelation {
     let relation_type =
-        RelationType::from_str(&row.relation_type).unwrap_or(RelationType::RelatedTo);
+        RelationType::parse_type(&row.relation_type).unwrap_or(RelationType::RelatedTo);
 
     KgRelation {
         from_entity: row.from_entity.clone(),
